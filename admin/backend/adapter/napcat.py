@@ -16,7 +16,7 @@ from backend.security.secrets import reveal_secret
 
 class NapCatAdapter(OutputProcessAdapter):
     def __init__(self, sink: EventSink) -> None:
-        super().__init__(sink)
+        super().__init__(sink, runtime_config.PROCESS_LOG_DIR, "napcat")
 
     @property
     def available(self) -> bool:
@@ -118,15 +118,18 @@ class NapCatAdapter(OutputProcessAdapter):
         else:
             environment.pop("NAPCAT_QUICK_PASSWORD", None)
             environment.pop("NAPCAT_QUICK_PASSWORD_MD5", None)
-        process = subprocess.Popen(
-            command,
-            cwd=runtime_config.NAPCAT_DIR,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        self.register(bot, process)
+        log_path = self.prepare_log_path(bot)
+        start_position = log_path.stat().st_size
+        with log_path.open("a", encoding="utf-8", buffering=1) as output:
+            process = subprocess.Popen(
+                command,
+                cwd=runtime_config.NAPCAT_DIR,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=environment,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+            )
+        self.register(bot, process, start_position)
         await self._sink("INFO", bot.name, "NapCat 已启动，等待 QQ 协议端连接")

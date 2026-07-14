@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  Activity, ArrowLeft, Bell, Bot, Check, ChevronDown, CircleHelp, CircleUserRound, Cpu,
-  Database, Download, Eye, EyeOff, ExternalLink, FileText, FolderOpen, Gauge, Keyboard, LayoutDashboard, Monitor, Moon, MoreHorizontal, Palette, Pause, Play,
+  Activity, ArrowLeft, Bell, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, CircleUserRound, Cpu,
+  Database, Download, Eye, EyeOff, ExternalLink, FileText, FolderOpen, Gauge, Keyboard, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Palette, Pause, Play,
   Maximize2, Minimize2, Plus, Puzzle, RefreshCw, RotateCcw, Search, Server,
   Settings, Square, SquareTerminal, Star, Sun, Trash2, UserRound, Users, Wifi, X,
 } from 'lucide-react'
 import './styles.css'
+import './layout.css'
 
 const API_BASE = `http://${window.location.hostname || '127.0.0.1'}:6700`
 const fallbackBots = []
@@ -488,7 +489,6 @@ function App() {
 
     <div className={`app-body ${active === '系统设置' ? 'settings-mode' : ''}`}>
       <aside className="sidebar">
-        <div className="sidebar-search"><Search size={15} /><input placeholder="搜索" onChange={(event) => { if (event.target.value) notify(`正在搜索：${event.target.value}`) }} /></div>
         <nav className="sidebar-nav">
           <NavItem icon={LayoutDashboard} label="概览" active={active} onClick={setActive} favoriteKey="page:概览" favorite={isFavorite('page:概览')} onToggleFavorite={toggleFavorite} />
           <NavItem icon={Bell} label="收件箱" active={active} onClick={() => notify('暂无新的收件箱消息')} favoriteKey="page:收件箱" favorite={isFavorite('page:收件箱')} onToggleFavorite={toggleFavorite} />
@@ -505,8 +505,6 @@ function App() {
           <NavItem icon={FileText} label="实时日志" active={active} onClick={setActive} favoriteKey="page:实时日志" favorite={isFavorite('page:实时日志')} onToggleFavorite={toggleFavorite} />
         </nav>
         <div className="sidebar-bottom">
-          <div className="resource-line"><span><Cpu size={14} />CPU</span><b>{online ? `${Math.round(system.cpu ?? 0)}%` : '—'}</b></div>
-          <div className="resource-line"><span><Database size={14} />内存</span><b>{online ? `${Math.round(system.memory ?? 0)}%` : '—'}</b></div>
           <button className="bottom-item" onClick={() => setActive('系统设置')}><Settings size={16} />设置</button>
           <button className="bottom-item" onClick={() => notify('桌面控制台正在运行')}><CircleHelp size={16} />帮助</button>
         </div>
@@ -577,7 +575,7 @@ function AccountWorkspace({ bots, selectedBot, selectedBotId, setSelectedBotId, 
 
     <div className="workspace-detail">
       {selectedBot ? <>
-        <div className="detail-topbar"><div className="detail-title"><div className="detail-avatar"><Bot size={17} /></div><div><div className="detail-kicker">QQ 账号 <span>/</span> {selectedBot.qq}</div><h2>{selectedBot.name}</h2></div></div><div className="detail-actions"><button className="soft-button" onClick={onDelete} aria-label="更多操作"><MoreHorizontal size={16} /></button><button className={`action-button ${running ? 'danger' : ''}`} onClick={() => action(selectedBot, running ? 'stop' : 'start', running ? '停止' : '启动')} disabled={busy.startsWith(`${selectedBot.id}:`)}>{running ? <Square size={14} /> : <Play size={14} />}{running ? '停止' : '启动'}</button></div></div>
+        <div className="detail-topbar"><div className="detail-title"><BotAvatar bot={selectedBot} className="detail-avatar" /><div><div className="detail-kicker">QQ 账号 <span>/</span> {selectedBot.qq}</div><h2>{selectedBot.name}</h2></div></div><div className="detail-actions"><button className="soft-button" onClick={onDelete} aria-label="更多操作"><MoreHorizontal size={16} /></button><button className={`action-button ${running ? 'danger' : ''}`} onClick={() => action(selectedBot, running ? 'stop' : 'start', running ? '停止' : '启动')} disabled={busy.startsWith(`${selectedBot.id}:`)}>{running ? <Square size={14} /> : <Play size={14} />}{running ? '停止' : '启动'}</button></div></div>
         <div className="detail-tabs"><button className={`detail-tab ${detailView === 'overview' ? 'active' : ''}`} onClick={() => setDetailView('overview')}>概览</button><button className={`detail-tab ${detailView === 'config' ? 'active' : ''}`} onClick={() => setDetailView('config')}>配置</button></div>
         <div className={`detail-scroll ${detailView === 'config' ? 'config-detail' : ''}`}>
           {detailView === 'overview' ? <>
@@ -678,7 +676,19 @@ function AccountConfig({ bot, onSavePassword, onRevealPassword, onSavePort, onSa
 
 function AccountListItem({ bot, selected, onClick }) {
   const running = bot.status === 'running'
-  return <button className={`account-list-item ${selected ? 'selected' : ''}`} onClick={onClick}><div className="list-avatar"><Bot size={15} /></div><div className="list-item-copy"><strong>{bot.name}</strong><span>{bot.qq}</span></div><div className={`list-status ${running ? 'green' : ''}`}><i />{running ? '运行中' : '已停止'}</div></button>
+  return <button className={`account-list-item ${selected ? 'selected' : ''}`} onClick={onClick}><BotAvatar bot={bot} className="list-avatar" /><div className="list-item-copy"><strong>{bot.name}</strong><span>{bot.qq}</span></div><div className={`list-status ${running ? 'green' : ''}`}><i />{running ? '运行中' : '已停止'}</div></button>
+}
+
+function BotAvatar({ bot, className = '' }) {
+  const qq = String(bot?.qq || '').trim()
+  const avatarUrl = qq ? `https://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(qq)}&s=640` : ''
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => setFailed(false), [avatarUrl])
+
+  return <div className={`bot-avatar ${className}`} title={`${bot?.name || 'Bot'} 头像`} aria-label={`${bot?.name || 'Bot'} 头像`}>
+    {avatarUrl && !failed ? <img className="bot-avatar-image" src={avatarUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} /> : <Bot size={15} />}
+  </div>
 }
 
 function EmptyDetail({ onCreate }) {
@@ -849,6 +859,7 @@ function AppearanceSettings({ theme, onThemeChange }) {
 
 function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, refresh, busy, action, onSelectBot }) {
   const [period, setPeriod] = useState('day')
+  const [botPage, setBotPage] = useState(1)
   const runningBots = bots.filter((bot) => bot.status === 'running')
   const periodStats = stats?.periods?.[period] || { received: 0, sent: 0, total: 0, groups: 0, private: 0, media: 0, commands: 0, active_days: 0 }
   const periodBots = stats?.bots?.[period] || []
@@ -856,26 +867,38 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, re
   const chartSeries = series.length ? series : Array.from({ length: 14 }, (_, index) => ({ day: `empty-${index}`, received: 0, sent: 0 }))
   const maxDaily = Math.max(1, ...chartSeries.map((item) => Math.max(Number(item.received || 0), Number(item.sent || 0))))
   const hasSeriesData = chartSeries.some((item) => Number(item.received || 0) > 0 || Number(item.sent || 0) > 0)
-  const chartLabels = hasSeriesData ? [maxDaily, Math.round(maxDaily * .75), Math.round(maxDaily * .5), Math.round(maxDaily * .25), 0] : [80, 60, 40, 20, 0]
+  const chartScale = hasSeriesData ? Math.max(100, Math.ceil(maxDaily / 100) * 100) : 80
+  const chartLabels = hasSeriesData ? [chartScale, chartScale * .75, chartScale * .5, chartScale * .25, 0] : [80, 60, 40, 20, 0]
   const chartPointPosition = (item, index, key) => {
     const x = chartSeries.length === 1 ? 50 : index / (chartSeries.length - 1) * 100
     const value = Number(item[key] || 0)
-    const y = 100 - (value / maxDaily * 100)
+    const y = 100 - (value / chartScale * 100)
     return { x, y }
   }
   const chartPoints = (key) => chartSeries.map((item, index) => {
     const { x, y } = chartPointPosition(item, index, key)
     return `${x},${y}`
   }).join(' ')
-  const maxRank = Math.max(1, ...periodBots.map((item) => Number(item.total || 0)))
   const periodLabel = period === 'day' ? '今日' : period === 'week' ? '本周' : '本月'
   const total = Number(periodStats.total || 0)
   const received = Number(periodStats.received || 0)
   const sent = Number(periodStats.sent || 0)
   const receivedShare = total ? Math.round(received / total * 100) : 0
   const sentShare = total ? Math.round(sent / total * 100) : 0
-  const primaryBot = runningBots[0] || bots[0]
-  const serviceState = (running, available = true) => !available ? ['待配置', 'muted'] : running ? ['运行中', 'green'] : ['已停止', 'muted']
+  const media = Number(periodStats.media || 0)
+  const mediaShare = total ? Math.round(media / total * 100) : 0
+  const yesterdaySeries = chartSeries.length > 1 ? chartSeries[chartSeries.length - 2] : null
+  const yesterdayTotal = yesterdaySeries ? Number(yesterdaySeries.received || 0) + Number(yesterdaySeries.sent || 0) : 0
+  const dailyChange = yesterdayTotal ? Math.round((total - yesterdayTotal) / yesterdayTotal * 100) : null
+  const botStats = new Map(periodBots.map((item) => [String(item.id), item]))
+  const firstBot = bots[0]
+  const memoryTotal = Number(system.memory_total || 0)
+  const memoryText = online && memoryTotal
+    ? `${((memoryTotal * Number(system.memory || 0) / 100) / (1024 ** 3)).toFixed(1)} GB / ${(memoryTotal / (1024 ** 3)).toFixed(1)} GB`
+    : '本机资源占用'
+  const pageSize = 3
+  const pageCount = Math.max(1, Math.ceil(bots.length / pageSize))
+  const visibleBots = bots.slice((botPage - 1) * pageSize, botPage * pageSize)
   const uptime = (seconds) => {
     const totalSeconds = Math.max(0, Number(seconds || 0))
     if (!totalSeconds) return '—'
@@ -883,40 +906,36 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, re
     const minutes = Math.floor((totalSeconds % 3600) / 60)
     return hours ? `${hours}小时 ${minutes}分` : `${Math.max(1, minutes)}分钟`
   }
+  useEffect(() => {
+    setBotPage((page) => Math.min(page, pageCount))
+  }, [pageCount])
   return <section className="runtime-page">
-    <div className="runtime-header"><div><div className="eyebrow">系统监控</div><div className="runtime-title-row"><h1>运行状态</h1><button className="runtime-info" type="button" title="查看运行状态说明" aria-label="查看运行状态说明"><CircleHelp size={16} /></button></div><p>实时查看 Bot、NapCat、NoneBot 和本机资源状态。</p></div><div className="runtime-header-actions"><span className={`runtime-sync ${online ? 'online' : ''}`}><i />{online ? '自动同步中' : '等待管理服务'}</span><button className="plain-icon" onClick={refresh} disabled={refreshing} aria-label="刷新运行状态" title="刷新运行状态"><RefreshCw size={16} className={refreshing ? 'spin' : ''} /></button></div></div>
-
     <div className="runtime-metrics">
-      <div className="runtime-metric"><div className="runtime-metric-icon purple"><Bot size={17} /></div><div><span>运行中的 Bot</span><strong>{runningBots.length}<small> / {bots.length}</small></strong><em>在线 / 总数</em></div></div>
-      <div className="runtime-metric"><div className="runtime-metric-icon green"><Server size={17} /></div><div><span>NapCat 进程</span><strong>{napcat.available ? napcat.running : 0}<small>{napcat.available ? ' 个运行中' : ' 待配置'}</small></strong><em>{napcat.available ? '进程状态正常' : '等待资源配置'}</em></div></div>
+      <div className="runtime-metric"><div className="runtime-metric-icon purple"><Bot size={19} /></div><div><span>在线 Bot</span><strong>{runningBots.length}<small> / {bots.length}</small></strong><em>全部在线</em></div></div>
+      <div className="runtime-metric"><div className="runtime-metric-icon green"><MessageSquare size={19} /></div><div><span>今日消息</span><strong>{total.toLocaleString()} <small>条</small></strong><em className={dailyChange !== null && dailyChange >= 0 ? 'positive' : ''}>{dailyChange === null ? '较昨日暂无数据' : `较昨日 ${dailyChange >= 0 ? '↑' : '↓'} ${Math.abs(dailyChange)}%`}</em></div></div>
       <div className="runtime-metric"><div className="runtime-metric-icon blue"><Cpu size={17} /></div><div><span>CPU 使用率</span><strong>{online ? `${Math.round(system.cpu ?? 0)}%` : '—'}</strong><em>负载良好</em></div></div>
-      <div className="runtime-metric"><div className="runtime-metric-icon orange"><Database size={17} /></div><div><span>内存使用率</span><strong>{online ? `${Math.round(system.memory ?? 0)}%` : '—'}</strong><em>本机资源占用</em></div></div>
+      <div className="runtime-metric"><div className="runtime-metric-icon orange"><Database size={17} /></div><div><span>内存使用率</span><strong>{online ? `${Math.round(system.memory ?? 0)}%` : '—'}</strong><em>{memoryText}</em></div></div>
     </div>
 
     <section className="runtime-section runtime-stats-section">
-      <div className="runtime-section-heading runtime-stats-heading"><div><h2>消息统计</h2><p>按 Bot 记录收到和发出的消息，数据保存在本机。</p></div><div className="runtime-period-tabs">{[['day', '日'], ['week', '周'], ['month', '月']].map(([value, label]) => <button key={value} className={period === value ? 'selected' : ''} onClick={() => setPeriod(value)}>{label}</button>)}</div></div>
+      <div className="runtime-section-heading runtime-stats-heading"><div><h2>消息趋势 <button className="runtime-info" type="button" title="查看消息统计说明" aria-label="查看消息统计说明"><CircleHelp size={14} /></button></h2><p>最近 14 天的收发消息统计</p></div><div className="runtime-period-tabs">{[['day', '今日'], ['week', '本周'], ['month', '本月']].map(([value, label]) => <button key={value} className={period === value ? 'selected' : ''} onClick={() => setPeriod(value)}>{label}</button>)}</div></div>
       <div className="runtime-analytics-grid">
         <div className="runtime-chart-panel">
-          <div className="runtime-analytics-head"><div><span>消息趋势</span><strong>{total.toLocaleString()}</strong><small>{periodLabel}消息总量</small></div><div className="runtime-chart-legend"><span><i className="received" />收到</span><span><i className="sent" />发出</span></div></div>
+          <div className="runtime-chart-head"><div className="runtime-chart-legend"><span><i className="received" />收到</span><span><i className="sent" />发出</span></div></div>
           <div className="runtime-chart-area" aria-label="近 14 天收到和发出消息趋势">
             <div className="runtime-chart-y-axis">{chartLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}</div>
-            <div className="runtime-chart-plot"><div className="runtime-chart-grid-lines"><i /><i /><i /><i /><i /></div><svg className="runtime-line-chart" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline className="received" points={chartPoints('received')} /><polyline className="sent" points={chartPoints('sent')} /></svg>{hasSeriesData && <div className="runtime-chart-points" aria-hidden="true">{chartSeries.flatMap((item, index) => ['received', 'sent'].map((key) => { const { x, y } = chartPointPosition(item, index, key); return <i key={`${item.day}-${key}`} className={`runtime-chart-point ${key}`} style={{ left: `${x}%`, top: `${y}%` }} /> }))}</div>}<div className="runtime-chart-x-axis">{(hasSeriesData ? chartSeries : [{ day: '00:00' }, { day: '06:00' }, { day: '12:00' }, { day: '18:00' }, { day: '24:00' }]).map((item, index, items) => <span key={`${item.day}-${index}`}>{hasSeriesData ? (index === 0 ? item.day.slice(5) : index === items.length - 1 ? item.day.slice(5) : index === Math.floor(items.length / 2) ? item.day.slice(5) : '') : item.day}</span>)}</div></div>
+            <div className="runtime-chart-plot"><div className="runtime-chart-grid-lines"><i /><i /><i /><i /><i /></div><svg className="runtime-line-chart" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline className="received" points={chartPoints('received')} /><polyline className="sent" points={chartPoints('sent')} /></svg>{hasSeriesData && <div className="runtime-chart-points" aria-hidden="true">{chartSeries.flatMap((item, index) => ['received', 'sent'].map((key) => { const { x, y } = chartPointPosition(item, index, key); return <i key={`${item.day}-${key}`} className={`runtime-chart-point ${key}`} style={{ left: `${x}%`, top: `${y}%` }} /> }))}</div>}<div className="runtime-chart-x-axis">{(hasSeriesData ? chartSeries : [{ day: '00:00' }, { day: '06:00' }, { day: '12:00' }, { day: '18:00' }, { day: '24:00' }]).map((item, index, items) => <span key={`${item.day}-${index}`}>{hasSeriesData ? (index === 0 || index === items.length - 1 || index % 2 === 0 ? item.day.slice(5) : '') : item.day}</span>)}</div></div>
           </div>
         </div>
-        <div className="runtime-overview-panel"><div className="runtime-analytics-head"><div><span>统计摘要</span><strong>{periodLabel}</strong></div><span className="runtime-overview-total">{total.toLocaleString()} 条</span></div><div className="runtime-share-list"><div><span><i className="received" />收到消息</span><b>{received.toLocaleString()}</b><small>{receivedShare}%</small></div><div><span><i className="sent" />发出消息</span><b>{sent.toLocaleString()}</b><small>{sentShare}%</small></div><div><span><i className="media" />媒体活动</span><b>{Number(periodStats.media || 0).toLocaleString()}</b><small>{Number(periodStats.active_days || 0)} 天活跃</small></div></div><div className="runtime-overview-foot"><span>群聊 {Number(periodStats.groups || 0).toLocaleString()}</span><span>私聊 {Number(periodStats.private || 0).toLocaleString()}</span><span>命令 {Number(periodStats.commands || 0).toLocaleString()}</span></div></div>
+        <div className="runtime-overview-panel"><h3>{periodLabel}统计</h3><div className="runtime-share-list"><div><span><i className="received" />收到消息</span><b>{received.toLocaleString()}</b><small>{receivedShare}%</small></div><div><span><i className="sent" />发出消息</span><b>{sent.toLocaleString()}</b><small>{sentShare}%</small></div><div><span><i className="media" />含媒体消息</span><b>{media.toLocaleString()}</b><small>{mediaShare}%</small></div></div><div className="runtime-overview-foot"><span>群聊 {Number(periodStats.groups || 0).toLocaleString()}</span><span>私聊 {Number(periodStats.private || 0).toLocaleString()}</span><span>命令 {Number(periodStats.commands || 0).toLocaleString()}</span></div></div>
       </div>
     </section>
 
-    <div className="runtime-analytics-lower">
-      <div className="runtime-comparison-panel"><div className="runtime-chart-heading"><strong>收发对比</strong><span>{periodLabel}</span></div><div className="runtime-comparison-list"><div><span>收到消息</span><div className="runtime-progress"><i className="received" style={{ width: `${receivedShare}%` }} /></div><b>{received.toLocaleString()}</b></div><div><span>发出消息</span><div className="runtime-progress"><i className="sent" style={{ width: `${sentShare}%` }} /></div><b>{sent.toLocaleString()}</b></div></div></div>
-      <div className="runtime-ranking-panel"><div className="runtime-chart-heading"><strong>Bot 排名</strong><span>{periodLabel}</span></div>{periodBots.length ? periodBots.slice(0, 5).map((item, index) => { const itemTotal = Number(item.total || 0); return <div className="runtime-ranking-row" key={item.id}><em>{index + 1}</em><div><strong>{item.name}</strong><span>QQ {item.qq}</span></div><div className="runtime-ranking-meter"><i style={{ width: `${itemTotal / maxRank * 100}%` }} /></div><b>{itemTotal.toLocaleString()}<small> 条</small></b></div> }) : <div className="runtime-empty compact">暂无统计数据</div>}</div>
-    </div>
-
     <div className="runtime-columns">
-      <section className="runtime-section runtime-bots-section"><div className="runtime-section-heading"><div><h2>Bot 运行概况</h2><p>每个账号的进程、端口和在线状态。</p></div><span>{bots.length} 个账号</span></div>{bots.length ? <div className="runtime-bot-table"><div className="runtime-bot-table-head"><span>Bot</span><span>状态</span><span>NapCat 进程</span><span>OneBot 端口</span><span>NapCat WebUI</span><span /></div>{bots.map((bot) => { const running = bot.status === 'running'; return <div className="runtime-bot-row" key={bot.id}><div className="runtime-bot-identity"><div className="runtime-bot-avatar"><Bot size={17} /></div><div><strong>{bot.name}</strong><span>{bot.qq}</span></div></div><StatusPill label={running ? '运行中' : '已停止'} state={running ? 'green' : 'muted'} /><span className="runtime-table-status"><i className={running ? 'green' : ''} />{running ? '运行中' : '已停止'}<small>{running && bot.pid ? `PID ${bot.pid}` : ''}</small></span><span className="runtime-table-value">{bot.port || '—'}</span><span className="runtime-table-value">{bot.napcat_port || '—'}</span><div className="runtime-bot-row-actions"><button className="secondary runtime-view-button" onClick={() => onSelectBot(bot.id)}>查看账号</button><button className={`runtime-action ${running ? 'danger' : ''}`} onClick={() => action(bot, running ? 'stop' : 'start', running ? '停止' : '启动')} disabled={busy.startsWith(`${bot.id}:`)}>{running ? <Square size={12} /> : <Play size={12} />}{running ? '停止' : '启动'}</button></div></div>})}</div> : <div className="runtime-empty"><Bot size={18} /><span>还没有可监控的 Bot</span></div>}</section>
-
-      <div className="runtime-side-column"><section className="runtime-section"><div className="runtime-section-heading"><div><h2>服务状态</h2><p>协议端和机器人服务。</p></div></div><div className="runtime-service-list">{[[Server, 'NapCat', napcat.running > 0, napcat.available], [SquareTerminal, 'NoneBot', runningBots.length > 0, Boolean(bots.length)], [SquareTerminal, 'OneBot 端口', Boolean(primaryBot?.port), Boolean(primaryBot)]].map(([Icon, label, running, available]) => { const [state, tone] = serviceState(running, available); return <div className="runtime-service-row" key={label}><div className="runtime-service-icon"><Icon size={15} /></div><div><strong>{label}</strong><span>{label === 'NapCat' ? (napcat.available ? `${napcat.running} 个进程已接管` : '尚未配置运行资源') : label === 'NoneBot' ? `${runningBots.length} 个 Bot 使用中` : primaryBot?.port ? `${primaryBot.port}` : '尚未配置'}</span></div><StatusPill label={label === 'OneBot 端口' ? (primaryBot?.port ? `${primaryBot.port}` : '未配置') : state} state={label === 'OneBot 端口' ? (primaryBot?.port ? 'green' : 'muted') : tone} /></div> })}</div></section></div>
+      <section className="runtime-section runtime-bots-section"><div className="runtime-section-heading"><div><h2>Bot 运行概况 <small>共 {bots.length} 个账号</small></h2></div></div>{bots.length ? <><div className="runtime-bot-table"><div className="runtime-bot-table-head"><span>Bot</span><span>QQ 号</span><span>状态</span><span>今日消息</span><span>OneBot 端口</span><span>NapCat WebUI</span><span>操作</span></div>{visibleBots.map((bot) => { const running = bot.status === 'running'; const botTotal = Number(botStats.get(String(bot.id))?.total || 0); return <div className="runtime-bot-row" key={bot.id}><div className="runtime-bot-identity"><BotAvatar bot={bot} className="runtime-bot-avatar" /><div><strong>{bot.name}</strong></div></div><span className="runtime-bot-qq">{bot.qq}</span><StatusPill label={running ? '运行中' : '已停止'} state={running ? 'green' : 'muted'} /><span className="runtime-table-value">{botTotal.toLocaleString()}</span><span className="runtime-table-value">{bot.port || '—'}</span><span className="runtime-table-value">{bot.napcat_port || '—'}</span><div className="runtime-bot-row-actions"><button className="secondary runtime-view-button" onClick={() => onSelectBot(bot.id)}>查看账号</button><button className={`runtime-action ${running ? 'danger' : ''}`} onClick={() => action(bot, running ? 'stop' : 'start', running ? '停止' : '启动')} disabled={busy.startsWith(`${bot.id}:`)}>{running ? <Square size={12} /> : <Play size={12} />}{running ? '停止' : '启动'}</button></div></div>})}</div>{pageCount > 1 && <div className="runtime-table-footer"><div className="runtime-pagination"><button className="plain-icon" onClick={() => setBotPage((page) => Math.max(1, page - 1))} disabled={botPage === 1} aria-label="上一页" title="上一页"><ChevronLeft size={15} /></button><span className="selected">{botPage}</span><button className="plain-icon" onClick={() => setBotPage((page) => Math.min(pageCount, page + 1))} disabled={botPage === pageCount} aria-label="下一页" title="下一页"><ChevronRight size={15} /></button></div><span>共 {bots.length} 条</span></div>}</> : <div className="runtime-empty"><Bot size={18} /><span>还没有可监控的 Bot</span></div>}</section>
     </div>
+
+    <section className="runtime-section runtime-services-section"><div className="runtime-section-heading"><div><h2>服务状态</h2></div></div><div className="runtime-service-cards"><div className="runtime-service-card"><div className="runtime-service-icon"><Server size={18} /></div><div><strong>NapCat</strong><span>{napcat.available ? '可选服务，未启动' : '尚未配置资源'}</span></div><StatusPill label={napcat.running > 0 ? '运行中' : '未启用'} state={napcat.running > 0 ? 'green' : 'muted'} /></div><div className="runtime-service-card"><div className="runtime-service-icon nonebot"><SquareTerminal size={18} /></div><div><strong>NoneBot</strong><span>{runningBots.length ? `${runningBots.length} 个插件已加载` : '等待 Bot 启动'}</span></div><StatusPill label={runningBots.length ? '运行中' : '未启动'} state={runningBots.length ? 'green' : 'muted'} /></div><div className="runtime-service-card"><div className="runtime-service-icon onebot"><FileText size={18} /></div><div><strong>OneBot 端口</strong><span>{firstBot?.port ? `端口 ${firstBot.port} 可用` : '尚未配置端口'}</span></div><StatusPill label={firstBot?.port ? '正常' : '未配置'} state={firstBot?.port ? 'green' : 'muted'} /></div></div></section>
   </section>
 }
 

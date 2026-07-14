@@ -5,12 +5,14 @@ from contextlib import suppress
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 import psutil
 
 from backend.domain.models import BotConfig
 
 EventSink = Callable[[str, str, str], Awaitable[None]]
+ProcessAlive = Callable[[], bool]
 
 
 async def terminate_process_tree(pid: int) -> None:
@@ -63,8 +65,10 @@ async def terminate_process(process: subprocess.Popen[str] | None) -> None:
 
 
 class OutputProcessAdapter:
-    def __init__(self, sink: EventSink) -> None:
+    def __init__(self, sink: EventSink, log_directory: Path, log_suffix: str) -> None:
         self._sink = sink
+        self._log_directory = log_directory
+        self._log_suffix = log_suffix
         self._processes: dict[str, subprocess.Popen[str]] = {}
         self._drain_tasks: dict[str, asyncio.Task[None]] = {}
 
@@ -78,9 +82,18 @@ class OutputProcessAdapter:
     def is_running(self, bot_id: str) -> bool:
         return self.process(bot_id) is not None
 
-    def register(self, bot: BotConfig, process: subprocess.Popen[str]) -> None:
+    def log_path(self, bot: BotConfig) -> Path:
+        return self._log_directory / f"{bot.id}.{self._log_suffix}.log"
+
+    def prepare_log_path(self, bot: BotConfig) -> Path:
+        path = self.log_path(bot)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(exist_ok=True)
+        return path
+
+    def register(self, bot: BotConfig, process: subprocess.Popen[str], start_position: int = 0) -> None:
         self._processes[bot.id] = process
-        task = asyncio.create_task(self._drain_output(bot, process))
+        task = self._start_tail(bot, lambda: process.poll() is None, start_position)
         self._drain_tasks[bot.id] = task
 
         def forget_task(_: asyncio.Task[None]) -> None:
@@ -89,15 +102,53 @@ class OutputProcessAdapter:
 
         task.add_done_callback(forget_task)
 
-    async def _drain_output(self, bot: BotConfig, process: subprocess.Popen[str]) -> None:
-        if process.stdout is None:
+    def attach_external(self, bot: BotConfig, process: psutil.Process) -> None:
+        if self._drain_tasks.get(bot.id) is not None:
             return
-        while process.poll() is None:
-            line = await asyncio.to_thread(process.stdout.readline)
-            if line:
-                await self._sink("INFO", bot.name, line.strip())
-            else:
-                await asyncio.sleep(0.1)
+        path = self.prepare_log_path(bot)
+        try:
+            start_position = path.stat().st_size
+        except OSError:
+            start_position = 0
+        task = self._start_tail(bot, process.is_running, start_position)
+        self._drain_tasks[bot.id] = task
+
+        def forget_task(_: asyncio.Task[None]) -> None:
+            if self._drain_tasks.get(bot.id) is task:
+                self._drain_tasks.pop(bot.id, None)
+
+        task.add_done_callback(forget_task)
+
+    def _start_tail(self, bot: BotConfig, is_alive: ProcessAlive, start_position: int) -> asyncio.Task[None]:
+        return asyncio.create_task(self._tail_output(bot, is_alive, start_position))
+
+    async def _tail_output(self, bot: BotConfig, is_alive: ProcessAlive, position: int) -> None:
+        path = self.log_path(bot)
+
+        while True:
+            try:
+                if path.exists():
+                    size = path.stat().st_size
+                    if position > size:
+                        position = 0
+                    with path.open("r", encoding="utf-8", errors="replace") as stream:
+                        stream.seek(position)
+                        while True:
+                            line = stream.readline()
+                            if not line:
+                                break
+                            position = stream.tell()
+                            await self._sink("INFO", bot.name, line.rstrip("\r\n"))
+                if not is_alive():
+                    return
+            except (OSError, UnicodeError, ValueError, psutil.Error):
+                try:
+                    alive = is_alive()
+                except psutil.Error:
+                    alive = False
+                if not alive:
+                    return
+            await asyncio.sleep(0.25)
 
     async def stop(self, bot_id: str) -> None:
         process = self._processes.pop(bot_id, None)

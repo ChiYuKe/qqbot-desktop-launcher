@@ -169,7 +169,7 @@ class BotService:
         return {
             "available": self.manager.napcat.available,
             "path": str(runtime_config.NAPCAT_EXE),
-            "running": sum(self.manager.napcat.is_running(bot.id) for bot in self.repository.list()),
+            "running": sum(self.manager.napcat.is_running_for_bot(bot) for bot in self.repository.list()),
         }
 
     def resources(self) -> dict:

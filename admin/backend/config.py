@@ -15,6 +15,7 @@ LEGACY_CONFIG_FILE = DATA_DIR / "bots.json"
 EVENT_LOG_FILE = DATA_DIR / "events.jsonl"
 RESOURCE_CONFIG_FILE = DATA_DIR / "resources.json"
 SCRIPT_DIR = DATA_DIR / "scripts"
+PROCESS_LOG_DIR = DATA_DIR / "process-logs"
 
 DEFAULT_NONEBOT_DIR = PROGRAM_DIR / "NoneBot"
 DEFAULT_NAPCAT_DIR = NAPCAT_ROOT / "app" / "NapCat.44498.Shell"

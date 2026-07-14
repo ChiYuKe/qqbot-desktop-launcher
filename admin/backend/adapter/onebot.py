@@ -16,7 +16,7 @@ from backend.domain.models import BotConfig
 
 class OneBotAdapter(OutputProcessAdapter):
     def __init__(self, sink: EventSink) -> None:
-        super().__init__(sink)
+        super().__init__(sink, runtime_config.PROCESS_LOG_DIR, "nonebot")
         self._started_at: dict[str, float] = {}
 
     async def start(self, bot: BotConfig) -> None:
@@ -32,21 +32,25 @@ class OneBotAdapter(OutputProcessAdapter):
         # arrive at the panel without replacement characters.
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
+        environment["PYTHONUNBUFFERED"] = "1"
         environment["QQ_BOT_ID"] = bot.id
         # Message statistics are recorded from the management event bus. Do
         # not also enable NoneBot's direct API hook here, otherwise one sent
         # message can be counted twice.
-        process = subprocess.Popen(
-            ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)],
-            cwd=runtime_config.NONEBOT_DIR,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        self.register(bot, process)
+        log_path = self.prepare_log_path(bot)
+        start_position = log_path.stat().st_size
+        with log_path.open("a", encoding="utf-8", buffering=1) as output:
+            process = subprocess.Popen(
+                ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+                cwd=runtime_config.NONEBOT_DIR,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=environment,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+            )
+        self.register(bot, process, start_position)
         self._started_at[bot.id] = time.time()
 
     async def stop(self, bot_id: str) -> None:

@@ -39,6 +39,16 @@ class BotManager:
                 event_key=self.stats.event_key(event),
             )
 
+    def recover_external_logs(self) -> None:
+        """Attach log tailers to Bot processes that survived an API restart."""
+        for bot in self.repository.list():
+            onebot_process = self.onebot.external_process(bot)
+            if onebot_process is not None:
+                self.onebot.attach_external(bot, onebot_process)
+            napcat_process = self.napcat.external_process(bot)
+            if napcat_process is not None:
+                self.napcat.attach_external(bot, napcat_process)
+
     def get(self, bot_id: str) -> BotConfig:
         bot = self.repository.get(bot_id)
         if not bot:
