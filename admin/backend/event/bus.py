@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from collections import deque
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,18 +14,21 @@ from backend.config import EVENT_HISTORY_LIMIT
 
 
 class EventBus:
+    """Bounded in-memory event stream with serialized background persistence."""
+
     def __init__(self, history_limit: int = EVENT_HISTORY_LIMIT, storage_path: Path | None = None) -> None:
-        self._history_limit = history_limit
-        self._history: deque[dict[str, Any]] = deque(maxlen=history_limit)
+        self._history = deque[dict[str, Any]](maxlen=history_limit)
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._storage_path = storage_path
         self._events_since_compaction = 0
+        self._storage_queue: asyncio.Queue[dict[str, Any] | None] | None = None
+        self._storage_task: asyncio.Task[None] | None = None
+        self._storage_lock = asyncio.Lock()
         self._load_history()
 
     def _load_history(self) -> None:
         if self._storage_path is None or not self._storage_path.exists():
             return
-
         try:
             with self._storage_path.open("r", encoding="utf-8") as stream:
                 for raw_line in stream:
@@ -33,20 +37,46 @@ class EventBus:
                     except (TypeError, ValueError):
                         continue
                     if isinstance(event, dict) and {"time", "level", "source", "message"} <= event.keys():
-                        # The file is written oldest-to-newest while the in-memory
-                        # history is exposed newest-first.
                         self._history.appendleft(event)
         except (OSError, UnicodeError):
-            # A damaged or temporarily unavailable log file must not prevent the
-            # management API from starting.
             return
-
         self._compact_if_needed(force=True)
+
+    async def start(self) -> None:
+        if self._storage_path is None or self._storage_task is not None:
+            return
+        self._storage_queue = asyncio.Queue(maxsize=2000)
+        self._storage_task = asyncio.create_task(self._storage_loop())
+
+    async def stop(self) -> None:
+        queue = self._storage_queue
+        task = self._storage_task
+        if queue is None or task is None:
+            return
+        await queue.join()
+        await queue.put(None)
+        with suppress(asyncio.CancelledError):
+            await task
+        self._storage_queue = None
+        self._storage_task = None
+
+    async def _storage_loop(self) -> None:
+        queue = self._storage_queue
+        if queue is None:
+            return
+        while True:
+            event = await queue.get()
+            try:
+                if event is None:
+                    return
+                async with self._storage_lock:
+                    await asyncio.to_thread(self._append_to_storage, event)
+            finally:
+                queue.task_done()
 
     def _append_to_storage(self, event: dict[str, Any]) -> None:
         if self._storage_path is None:
             return
-
         try:
             self._storage_path.parent.mkdir(parents=True, exist_ok=True)
             with self._storage_path.open("a", encoding="utf-8") as stream:
@@ -54,7 +84,6 @@ class EventBus:
             self._events_since_compaction += 1
             self._compact_if_needed()
         except (OSError, UnicodeError):
-            # Logging should remain best-effort and must never take down a Bot.
             return
 
     def _compact_if_needed(self, force: bool = False) -> None:
@@ -64,11 +93,9 @@ class EventBus:
             size = self._storage_path.stat().st_size
         except OSError:
             return
-
-        threshold = max(1024 * 1024, self._history_limit * 4096)
+        threshold = max(1024 * 1024, len(self._history) * 4096)
         if not force and (size <= threshold or self._events_since_compaction < 100):
             return
-
         temporary_path = self._storage_path.with_suffix(f"{self._storage_path.suffix}.tmp")
         try:
             with temporary_path.open("w", encoding="utf-8") as stream:
@@ -77,10 +104,8 @@ class EventBus:
             temporary_path.replace(self._storage_path)
             self._events_since_compaction = 0
         except (OSError, UnicodeError):
-            try:
+            with suppress(OSError):
                 temporary_path.unlink(missing_ok=True)
-            except OSError:
-                pass
 
     async def publish(self, level: str, source: str, message: str) -> dict[str, Any]:
         event = {
@@ -92,38 +117,40 @@ class EventBus:
             "message": message,
         }
         self._history.appendleft(event)
-        self._append_to_storage(event)
-        for queue in tuple(self._subscribers):
+        queue = self._storage_queue
+        if queue is None:
+            self._append_to_storage(event)
+        else:
+            await queue.put(event)
+        for subscriber in tuple(self._subscribers):
             try:
-                queue.put_nowait(event)
+                subscriber.put_nowait(event)
             except asyncio.QueueFull:
-                try:
-                    queue.get_nowait()
-                    queue.put_nowait(event)
-                except asyncio.QueueEmpty:
-                    pass
+                with suppress(asyncio.QueueEmpty):
+                    subscriber.get_nowait()
+                with suppress(asyncio.QueueFull):
+                    subscriber.put_nowait(event)
         return event
 
     def history(self) -> list[dict[str, Any]]:
         return list(self._history)
 
-    def clear(self) -> None:
-        self._history.clear()
-        self._events_since_compaction = 0
-        for queue in tuple(self._subscribers):
+    async def clear(self) -> None:
+        queue = self._storage_queue
+        if queue is not None:
             while True:
                 try:
                     queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
+                else:
+                    queue.task_done()
+        self._history.clear()
+        self._events_since_compaction = 0
         if self._storage_path is None:
             return
-        try:
-            self._storage_path.unlink(missing_ok=True)
-        except OSError:
-            # Clearing the in-memory view is still useful if the file is locked
-            # by another process; the next event will try to persist normally.
-            return
+        async with self._storage_lock:
+            await asyncio.to_thread(self._storage_path.unlink, missing_ok=True)
 
     def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=100)

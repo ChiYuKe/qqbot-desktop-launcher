@@ -18,11 +18,13 @@
     "files": [
       "main.cjs",
       "preload.cjs",
-      "package.json"
+      "package.json",
+      "assets/icon.ico"
     ],
     "win": {
       "target": "portable",
-      "artifactName": "QQBot-Desktop-Launcher.exe"
+      "artifactName": "QQBot-Desktop-Launcher.exe",
+      "icon": "assets/icon.ico"
     }
   },
   "devDependencies": {

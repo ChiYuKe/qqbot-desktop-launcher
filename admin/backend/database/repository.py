@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from backend.domain.models import BotConfig
 
@@ -39,8 +40,20 @@ class BotRepository:
         connection.row_factory = sqlite3.Row
         return connection
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.executescript(SCHEMA)
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(bots)").fetchall()}
             if "password_secret" not in columns:
@@ -61,7 +74,7 @@ class BotRepository:
                 next_port = max(next_port, port + 1)
 
     def _migrate_legacy_json(self) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             has_rows = connection.execute("SELECT 1 FROM bots LIMIT 1").fetchone() is not None
             if has_rows or not self.legacy_file.exists():
                 return
@@ -83,33 +96,33 @@ class BotRepository:
                     continue
 
     def list(self) -> list[BotConfig]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute("SELECT * FROM bots ORDER BY created_at, id").fetchall()
         return [BotConfig.from_row(row) for row in rows]
 
     def get(self, bot_id: str) -> BotConfig | None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             row = connection.execute("SELECT * FROM bots WHERE id = ?", (bot_id,)).fetchone()
         return BotConfig.from_row(row) if row else None
 
     def exists_port(self, port: int, exclude_bot_id: str | None = None) -> bool:
-        with self._connect() as connection:
+        with self._connection() as connection:
             if exclude_bot_id:
                 return connection.execute("SELECT 1 FROM bots WHERE port = ? AND id != ?", (port, exclude_bot_id)).fetchone() is not None
             return connection.execute("SELECT 1 FROM bots WHERE port = ?", (port,)).fetchone() is not None
 
     def exists_qq(self, qq: str) -> bool:
-        with self._connect() as connection:
+        with self._connection() as connection:
             return connection.execute("SELECT 1 FROM bots WHERE qq = ?", (qq,)).fetchone() is not None
 
     def exists_napcat_port(self, port: int, exclude_bot_id: str | None = None) -> bool:
-        with self._connect() as connection:
+        with self._connection() as connection:
             if exclude_bot_id:
                 return connection.execute("SELECT 1 FROM bots WHERE napcat_port = ? AND id != ?", (port, exclude_bot_id)).fetchone() is not None
             return connection.execute("SELECT 1 FROM bots WHERE napcat_port = ?", (port,)).fetchone() is not None
 
     def create(self, bot: BotConfig) -> BotConfig:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute(
                 "INSERT INTO bots (id, name, qq, port, napcat_port, script, password_secret, groups, plugins) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (bot.id, bot.name, bot.qq, bot.port, bot.napcat_port, bot.script, bot.password_secret, bot.groups, bot.plugins),
@@ -117,17 +130,17 @@ class BotRepository:
         return bot
 
     def update_password(self, bot_id: str, password_secret: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("UPDATE bots SET password_secret = ? WHERE id = ?", (password_secret, bot_id))
 
     def update_port(self, bot_id: str, port: int) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("UPDATE bots SET port = ? WHERE id = ?", (port, bot_id))
 
     def update_napcat_port(self, bot_id: str, port: int) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("UPDATE bots SET napcat_port = ? WHERE id = ?", (port, bot_id))
 
     def delete(self, bot_id: str) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("DELETE FROM bots WHERE id = ?", (bot_id,))

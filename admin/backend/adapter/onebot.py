@@ -1,14 +1,19 @@
 from __future__ import annotations
 
-import asyncio
 import os
+from pathlib import Path
 import subprocess
 import time
-from pathlib import Path
 
 import psutil
 
-from backend.adapter.process import EventSink, OutputProcessAdapter, terminate_process_tree
+from backend.adapter.process import (
+    EventSink,
+    OutputProcessAdapter,
+    find_listening_process,
+    find_processes_by_command,
+    process_command,
+)
 import backend.config as runtime_config
 from backend.domain.errors import AdapterUnavailableError
 from backend.domain.models import BotConfig
@@ -17,26 +22,26 @@ from backend.domain.models import BotConfig
 class OneBotAdapter(OutputProcessAdapter):
     def __init__(self, sink: EventSink) -> None:
         super().__init__(sink, runtime_config.PROCESS_LOG_DIR, "nonebot")
-        self._started_at: dict[str, float] = {}
 
     async def start(self, bot: BotConfig) -> None:
-        if self.is_running(bot.id):
+        if self.is_running_for_bot(bot):
             return
         script = Path(bot.script)
         if not script.exists():
             raise AdapterUnavailableError("Bot 启动脚本不存在")
+
         environment = os.environ.copy()
         environment["QQ_NONEBOT_DIR"] = str(runtime_config.NONEBOT_DIR)
-        # Python on Windows may choose the system code page when stdout is
-        # redirected to a pipe.  Force UTF-8 so Chinese OneBot/NoneBot logs
-        # arrive at the panel without replacement characters.
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
         environment["PYTHONUNBUFFERED"] = "1"
         environment["QQ_BOT_ID"] = bot.id
-        # Message statistics are recorded from the management event bus. Do
-        # not also enable NoneBot's direct API hook here, otherwise one sent
-        # message can be counted twice.
+        compat_path = Path(__file__).resolve().parents[1] / "runtime_compat"
+        python_path = [str(compat_path)]
+        if environment.get("PYTHONPATH"):
+            python_path.append(environment["PYTHONPATH"])
+        environment["PYTHONPATH"] = os.pathsep.join(python_path)
+
         log_path = self.prepare_log_path(bot)
         start_position = log_path.stat().st_size
         with log_path.open("a", encoding="utf-8", buffering=1) as output:
@@ -51,72 +56,39 @@ class OneBotAdapter(OutputProcessAdapter):
                 stderr=subprocess.STDOUT,
             )
         self.register(bot, process, start_position)
-        self._started_at[bot.id] = time.time()
 
-    async def stop(self, bot_id: str) -> None:
-        await super().stop(bot_id)
-        self._started_at.pop(bot_id, None)
-
-    def external_process(self, bot: BotConfig) -> psutil.Process | None:
-        """Find a bot started before the current management service instance."""
-        try:
-            connections = psutil.net_connections(kind="tcp")
-        except psutil.Error:
-            return None
-        for connection in connections:
-            if not connection.laddr or connection.laddr.port != bot.port:
-                continue
-            if connection.status != psutil.CONN_LISTEN or not connection.pid:
-                continue
-            try:
-                process = psutil.Process(connection.pid)
-                command = " ".join(process.cmdline()).lower()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
+    def discover(self, bot: BotConfig) -> psutil.Process | None:
+        tracked = self.tracked_process(bot.id)
+        if tracked is not None:
+            return tracked
+        listener = find_listening_process(bot.port)
+        if listener is not None:
+            command = process_command(listener)
             if "bot.py" in command or "nonebot" in command:
-                return process
+                self.attach_external(bot, listener)
+                return listener
+        matches = find_processes_by_command(str(Path(bot.script).resolve()))
+        if matches:
+            self.attach_external(bot, matches[0])
+            return matches[0]
         return None
 
-    def is_running_for_bot(self, bot: BotConfig) -> bool:
-        return self.is_running(bot.id) or self.external_process(bot) is not None
+    def external_process(self, bot: BotConfig) -> psutil.Process | None:
+        return self.discover(bot)
 
-    async def stop_external(self, bot: BotConfig) -> None:
-        target_script = str(Path(bot.script).resolve()).lower().replace("/", "\\")
-        pids: set[int] = set()
-        process = self.external_process(bot)
+    def is_running_for_bot(self, bot: BotConfig) -> bool:
+        return self.discover(bot) is not None
+
+    def process_ids_for_bot(self, bot: BotConfig) -> set[int]:
+        pids = self.process_ids(bot.id)
+        process = self.discover(bot)
         if process is not None:
             pids.add(process.pid)
-
-        try:
-            candidates = list(psutil.process_iter(["pid", "cmdline", "ppid"]))
-        except psutil.Error:
-            candidates = []
-
-        processes = {item.pid: item for item in candidates}
-        for item in candidates:
-            if self._has_script_ancestor(item, processes, target_script):
-                pids.add(item.pid)
-
-        for pid in pids:
-            await terminate_process_tree(pid)
-
-    @staticmethod
-    def _has_script_ancestor(process: psutil.Process, processes: dict[int, psutil.Process], target_script: str) -> bool:
-        current: psutil.Process | None = process
-        visited: set[int] = set()
-        while current is not None and current.pid not in visited:
-            visited.add(current.pid)
-            try:
-                command = " ".join(current.cmdline()).lower().replace("/", "\\")
-                if target_script in command:
-                    return True
-                parent_id = current.ppid()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                return False
-            current = processes.get(parent_id)
-        return False
+        pids.update(item.pid for item in find_processes_by_command(str(Path(bot.script).resolve())))
+        return pids
 
     def uptime(self, bot_id: str) -> int:
-        if not self.is_running(bot_id) or bot_id not in self._started_at:
+        started_at = self.start_time(bot_id)
+        if started_at is None:
             return 0
-        return max(0, int(time.time() - self._started_at[bot_id]))
+        return max(0, int(time.time() - started_at))

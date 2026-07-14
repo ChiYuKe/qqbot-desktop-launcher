@@ -28,24 +28,10 @@ class BotService:
         await self.resource_setup.shutdown()
 
     def list_bots(self) -> list[dict]:
-        return [self._present(bot) for bot in self.repository.list()]
+        return self.manager.list()
 
     def _present(self, bot: BotConfig) -> dict:
-        running = self.manager.is_running(bot.id)
-        return {
-            "id": bot.id,
-            "name": bot.name,
-            "qq": bot.qq,
-            "port": bot.port,
-            "napcat_port": bot.napcat_port,
-            "status": "running" if running else "stopped",
-            "protocol": "NapCat / OneBot v11",
-            "groups": bot.groups,
-            "plugins": bot.plugins,
-            "password_configured": bool(bot.password_secret),
-            "uptime_seconds": self.manager.uptime(bot.id),
-            "managed": True,
-        }
+        return self.manager.snapshot(bot)
 
     def create(self, name: str, qq: str, port: int, password: str | None = None, napcat_port: int | None = None) -> BotConfig:
         name = name.strip()
@@ -65,6 +51,7 @@ class BotService:
         script = self._create_script(bot_id, port)
         bot = BotConfig(id=bot_id, name=name, qq=qq, port=port, napcat_port=selected_napcat_port, script=str(script), password_secret=protect_secret(password))
         self.repository.create(bot)
+        self.manager.refresh_bot_index()
         self.manager.napcat.sync_onebot_port(bot)
         return bot
 
@@ -90,9 +77,9 @@ class BotService:
 
     async def delete(self, bot_id: str) -> None:
         bot = self.manager.get(bot_id)
-        if self.manager.is_running(bot_id) or self.manager.napcat.is_running_for_bot(bot):
-            await self.manager.stop(bot_id, "删除")
+        await self.manager.stop_now(bot_id, "删除")
         self.repository.delete(bot_id)
+        self.manager.refresh_bot_index()
         self.stats.remove_bot(bot_id)
         script = Path(bot.script)
         if script.exists() and script.parent == SCRIPT_DIR:
@@ -100,16 +87,7 @@ class BotService:
         await self.event_bus.publish("INFO", "系统", f"删除了 Bot「{bot_id}」")
 
     async def action(self, bot_id: str, action: str) -> dict:
-        if action == "start":
-            await self.manager.start(bot_id)
-        elif action == "stop":
-            await self.manager.stop(bot_id)
-        elif action == "restart":
-            await self.manager.restart(bot_id)
-        else:
-            raise ValueError("无效的操作")
-        bot = self.manager.get(bot_id)
-        return {"ok": True, "bot_id": bot_id, "action": action, "status": "running" if self.manager.is_running(bot_id) else "stopped"}
+        return await self.manager.request_action(bot_id, action)
 
     async def update_password(self, bot_id: str, password: str | None) -> None:
         bot = self.manager.get(bot_id)
@@ -162,14 +140,14 @@ class BotService:
             if not target_qq:
                 raise ValueError(f"历史日志中没有找到快速登录序号 {target_index}")
             quick_login = re.fullmatch(r"(\d{5,20})", target_qq)
-        await self.manager.quick_login(bot_id, quick_login.group(1))
-        return {"ok": True, "bot_id": bot_id, "command": f"-q {quick_login.group(1)}"}
+        return await self.manager.request_login(bot_id, quick_login.group(1))
 
     def napcat_status(self) -> dict:
+        snapshots = self.manager.list()
         return {
             "available": self.manager.napcat.available,
             "path": str(runtime_config.NAPCAT_EXE),
-            "running": sum(self.manager.napcat.is_running_for_bot(bot) for bot in self.repository.list()),
+            "running": sum(bool(item.get("runtime", {}).get("napcat", {}).get("running")) for item in snapshots),
         }
 
     def resources(self) -> dict:
@@ -178,8 +156,8 @@ class BotService:
     def update_resource(self, kind: str, path: str) -> dict:
         return runtime_config.set_resource_path(kind, path)
 
-    def start_resource_setup(self) -> dict:
-        return self.resource_setup.start()
+    def start_resource_setup(self, kinds: list[str] | None = None) -> dict:
+        return self.resource_setup.start(kinds)
 
     def resource_setup_status(self, job_id: str | None = None) -> dict:
         return self.resource_setup.status(job_id)

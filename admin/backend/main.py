@@ -23,6 +23,7 @@ from backend.websocket.routes import router as websocket_router
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     repository = BotRepository(DATABASE_FILE, LEGACY_CONFIG_FILE)
     event_bus = EventBus(storage_path=EVENT_LOG_FILE)
+    await event_bus.start()
     stats = MessageStatsRepository(DATABASE_FILE)
     stats.backfill_events(EVENT_LOG_FILE, [{"id": bot.id, "name": bot.name, "qq": bot.qq} for bot in repository.list()])
     manager = BotManager(repository, event_bus, stats)
@@ -39,11 +40,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await app.state.bot_service.shutdown()
         await manager.shutdown()
+        await event_bus.stop()
 
 
 def create_app() -> FastAPI:
     application = FastAPI(title="QQ Bot Control Panel", lifespan=lifespan)
-    application.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["null", "http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:4173", "http://127.0.0.1:4173"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type"],
+    )
 
     @application.exception_handler(DomainError)
     async def domain_error_handler(_: Request, error: DomainError) -> JSONResponse:

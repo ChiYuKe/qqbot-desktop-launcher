@@ -95,15 +95,27 @@ DEFAULT_NAPCAT_PORT = 6099
 
 def resource_status() -> dict[str, object]:
     napcat_exe = NAPCAT_EXE
+    qq_exe = NAPCAT_DIR / "QQ.exe"
     nonebot_valid = (NONEBOT_DIR / "bot.py").exists() and (NONEBOT_DIR / "pyproject.toml").exists()
-    napcat_valid = napcat_exe.exists()
+    napcat_launcher_exists = napcat_exe.exists()
+    napcat_qq_exists = qq_exe.exists()
+    napcat_valid = napcat_launcher_exists and napcat_qq_exists
+    napcat_missing = "" if napcat_valid else "qq" if napcat_launcher_exists and not napcat_qq_exists else "launcher"
     return {
         "initialized": nonebot_valid and napcat_valid,
+        "setup_scope": "per-resource",
         "nonebot": {"path": str(NONEBOT_DIR), "exists": NONEBOT_DIR.exists(), "valid": nonebot_valid},
-        "napcat": {"path": str(NAPCAT_DIR), "exists": NAPCAT_DIR.exists(), "valid": napcat_valid},
+        "napcat": {
+            "path": str(NAPCAT_DIR),
+            "exists": NAPCAT_DIR.exists(),
+            "valid": napcat_valid,
+            "launcher_exists": napcat_launcher_exists,
+            "qq_exists": napcat_qq_exists,
+            "missing": napcat_missing,
+        },
         "defaults": {"nonebot": str(DEFAULT_NONEBOT_DIR), "napcat": str(DEFAULT_NAPCAT_DIR)},
         "official": {
-            "nonebot": "https://nonebot.dev/docs/start/installation",
+            "nonebot": "https://nonebot.dev/docs/quick-start",
             "napcat": "https://github.com/NapNeko/NapCatQQ/releases",
         },
     }
@@ -123,6 +135,8 @@ def set_resource_path(kind: str, path: str) -> dict[str, object]:
         candidate, executable = _resolve_napcat_paths(candidate)
         if not executable.exists():
             raise ValueError("选择的目录不是有效的 NapCat 目录（找不到 NapCatWinBootMain.exe）")
+        if not (candidate / "QQ.exe").exists():
+            raise ValueError("NapCat 目录缺少 QQ.exe，请先安装 QQ，或选择同时包含 QQ.exe 和 NapCatWinBootMain.exe 的目录")
         NAPCAT_DIR = candidate
         NAPCAT_EXE = executable
         _resource_paths["napcat_dir"] = str(candidate)

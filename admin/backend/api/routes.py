@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import asyncio
+import base64
+import hashlib
+import mimetypes
+import re
+import sqlite3
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import HTTPRedirectHandler, Request as UrlRequest, build_opener
 from typing import Any
 
 import psutil
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from backend.domain.errors import DomainError
@@ -35,6 +44,14 @@ class ResourcePathPayload(BaseModel):
     path: str = Field(min_length=1, max_length=1000)
 
 
+class ResourceSetupPayload(BaseModel):
+    kinds: list[str] = Field(default_factory=lambda: ["nonebot"])
+
+
+class PluginTogglePayload(BaseModel):
+    enabled: bool
+
+
 class StatsRecordPayload(BaseModel):
     bot_id: str = Field(min_length=1, max_length=80)
     direction: str = Field(pattern="^(received|sent)$")
@@ -42,6 +59,9 @@ class StatsRecordPayload(BaseModel):
 
 
 router = APIRouter(prefix="/api")
+_MEDIA_HOSTS = {"multimedia.nt.qq.com.cn", "gchat.qpic.cn", "c2cpicdw.qpic.cn"}
+_MAX_MEDIA_BYTES = 20 * 1024 * 1024
+API_PROTOCOL_VERSION = 2
 
 
 def service(request: Request):
@@ -50,7 +70,12 @@ def service(request: Request):
 
 @router.get("/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "cpu": psutil.cpu_percent(interval=None), "memory": psutil.virtual_memory().percent}
+    return {
+        "ok": True,
+        "api_version": API_PROTOCOL_VERSION,
+        "cpu": psutil.cpu_percent(interval=None),
+        "memory": psutil.virtual_memory().percent,
+    }
 
 
 @router.get("/napcat")
@@ -85,13 +110,32 @@ async def update_runtime_resource(kind: str, payload: ResourcePathPayload, reque
 
 
 @router.post("/runtime/setup")
-async def start_runtime_setup(request: Request) -> dict[str, Any]:
-    return service(request).start_resource_setup()
+async def start_runtime_setup(request: Request, payload: ResourceSetupPayload | None = None) -> dict[str, Any]:
+    try:
+        return service(request).start_resource_setup(payload.kinds if payload else ["nonebot"])
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
 
 
 @router.get("/runtime/setup/{job_id}")
 async def runtime_setup_status(job_id: str, request: Request) -> dict[str, Any]:
     return service(request).resource_setup_status(job_id)
+
+
+@router.get("/plugins")
+async def list_plugins(request: Request) -> dict[str, Any]:
+    return request.app.state.plugin_registry.snapshot()
+
+
+@router.put("/plugins/{plugin_id}")
+async def update_plugin(plugin_id: str, payload: PluginTogglePayload, request: Request) -> dict[str, Any]:
+    try:
+        result = request.app.state.plugin_registry.set_enabled(plugin_id, payload.enabled)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    action = "启用" if payload.enabled else "停用"
+    await request.app.state.event_bus.publish("INFO", "系统", f"已{action} NoneBot 插件「{plugin_id}」，重启 Bot 后生效")
+    return result
 
 
 @router.get("/napcat/qrcode")
@@ -103,9 +147,105 @@ async def napcat_qrcode() -> FileResponse:
     return FileResponse(latest, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
+def _safe_media_filename(value: str) -> str:
+    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", value or "qq-image").strip("._")
+    return (filename or "qq-image")[:120]
+
+
+def _is_allowed_media_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        return parsed.scheme.lower() == "https" and hostname in _MEDIA_HOSTS and parsed.port in (None, 443)
+    except ValueError:
+        return False
+
+
+class _SafeMediaRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, request, file, code, message, headers, newurl):
+        if not _is_allowed_media_url(newurl):
+            raise URLError("图片地址重定向到了不受信任的域名")
+        return super().redirect_request(request, file, code, message, headers, newurl)
+
+
+def _download_media(url: str) -> tuple[bytes, str]:
+    request = UrlRequest(url, headers={"User-Agent": "QQBotControlPanel/1.0"})
+    opener = build_opener(_SafeMediaRedirectHandler)
+    with opener.open(request, timeout=20) as response:  # noqa: S310 - host is validated before this call
+        content_length = response.headers.get("Content-Length")
+        if content_length and int(content_length) > _MAX_MEDIA_BYTES:
+            raise ValueError("图片文件超过 20 MB，无法保存")
+        data = response.read(_MAX_MEDIA_BYTES + 1)
+        if len(data) > _MAX_MEDIA_BYTES:
+            raise ValueError("图片文件超过 20 MB，无法保存")
+        media_type = response.headers.get_content_type() or "application/octet-stream"
+    return data, media_type
+
+
+def _read_cached_media(filename: str) -> tuple[bytes, str] | None:
+    database = runtime_config.NONEBOT_DIR / "data" / "auto_learn" / "rules.db"
+    if not database.exists() or not filename:
+        return None
+    media_hash = "{IMG:" + hashlib.md5(filename.encode("utf-8")).hexdigest()[:10] + "}"
+    try:
+        with sqlite3.connect(database, timeout=2) as connection:
+            row = connection.execute(
+                "SELECT data_base64 FROM image_cache WHERE media_hash = ?",
+                (media_hash,),
+            ).fetchone()
+    except (OSError, sqlite3.Error):
+        return None
+    if not row or not row[0]:
+        return None
+    try:
+        data = base64.b64decode(str(row[0]), validate=True)
+    except (ValueError, TypeError):
+        return None
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return data, media_type
+
+
+@router.get("/media/download")
+async def media_download(url: str, filename: str = "qq-image") -> Response:
+    if not _is_allowed_media_url(url):
+        raise HTTPException(status_code=400, detail="只允许保存 QQ 图片链接")
+    try:
+        data, media_type = await asyncio.to_thread(_download_media, url)
+    except HTTPError as error:
+        raise HTTPException(status_code=502, detail=f"图片服务器返回 HTTP {error.code}") from error
+    except (URLError, OSError, ValueError, TypeError) as error:
+        raise HTTPException(status_code=502, detail=f"图片下载失败：{error}") from error
+    safe_filename = _safe_media_filename(filename)
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'},
+    )
+
+
+@router.get("/media/cache")
+async def media_cache(file: str, download: bool = False) -> Response:
+    cached = await asyncio.to_thread(_read_cached_media, file)
+    if cached is None:
+        raise HTTPException(status_code=404, detail="本地没有找到这张图片的缓存")
+    data, media_type = cached
+    headers = {"Cache-Control": "private, max-age=3600"}
+    if download:
+        headers["Content-Disposition"] = f'attachment; filename="{_safe_media_filename(file)}"'
+    return Response(content=data, media_type=media_type, headers=headers)
+
+
 @router.get("/bots")
 async def list_bots(request: Request) -> list[dict[str, Any]]:
     return service(request).list_bots()
+
+
+@router.get("/operations/{operation_id}")
+async def operation_status(operation_id: str, request: Request) -> dict[str, Any]:
+    operation = request.app.state.bot_manager.operation(operation_id)
+    if operation is None:
+        raise HTTPException(404, "操作不存在或已过期")
+    return operation
 
 
 @router.post("/bots")
@@ -194,14 +334,12 @@ async def bot_action(bot_id: str, action: str, request: Request) -> dict[str, An
 
 @router.get("/system")
 async def system_info(request: Request) -> dict[str, Any]:
-    repository = request.app.state.repository
-    manager = request.app.state.bot_manager
-    bots = repository.list()
+    snapshots = request.app.state.bot_manager.list()
     return {
         "cpu": psutil.cpu_percent(interval=None),
         "memory": psutil.virtual_memory().percent,
         "memory_total": psutil.virtual_memory().total,
-        "running_bots": sum(manager.is_running(bot.id) for bot in bots),
+        "running_bots": sum(item["status"] in {"running", "login_required"} for item in snapshots),
     }
 
 
@@ -212,5 +350,5 @@ async def list_logs(request: Request) -> list[dict[str, Any]]:
 
 @router.post("/logs/clear")
 async def clear_logs(request: Request) -> dict[str, bool]:
-    request.app.state.event_bus.clear()
+    await request.app.state.event_bus.clear()
     return {"ok": True}

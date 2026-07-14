@@ -1,8 +1,9 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron')
-const { spawn } = require('child_process')
+const { spawn, spawnSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
 const http = require('http')
+const API_PROTOCOL_VERSION = 2
 
 function resolveProjectRoot() {
   const candidates = []
@@ -24,7 +25,14 @@ const projectRoot = resolveProjectRoot()
 const adminRoot = path.join(projectRoot, 'admin')
 const panelDist = path.join(adminRoot, 'frontend', 'dist', 'index.html')
 const python = path.join(projectRoot, '.venv', 'Scripts', 'python.exe')
+const iconCandidates = [
+  path.join(__dirname, 'assets', 'icon.ico'),
+  path.join(adminRoot, 'desktop', 'assets', 'icon.ico'),
+]
+const iconPath = iconCandidates.find(candidate => fs.existsSync(candidate))
 let apiProcess
+let apiPid
+let apiStopping = false
 let mainWindow
 
 ipcMain.on('window-minimize', () => mainWindow?.minimize())
@@ -33,7 +41,10 @@ ipcMain.on('window-toggle-maximize', () => {
   if (mainWindow.isMaximized()) mainWindow.unmaximize()
   else mainWindow.maximize()
 })
-ipcMain.on('window-close', () => mainWindow?.close())
+ipcMain.on('window-close', () => {
+  stopApiProcess()
+  mainWindow?.close()
+})
 ipcMain.handle('open-external', async (_, rawUrl) => {
   try {
     const url = new URL(String(rawUrl))
@@ -73,25 +84,38 @@ function waitForApi(timeoutMs = 15000) {
   })
 }
 
-function apiIsHealthy() {
+function apiStatus() {
   return new Promise(resolve => {
-    const request = http.get('http://127.0.0.1:6700/api/stats', response => {
-      response.resume()
-      resolve(response.statusCode === 200)
+    const request = http.get('http://127.0.0.1:6700/api/health', response => {
+      let body = ''
+      response.setEncoding('utf8')
+      response.on('data', chunk => { body += chunk })
+      response.on('end', () => {
+        if (response.statusCode !== 200) return resolve('offline')
+        try {
+          const payload = JSON.parse(body)
+          resolve(payload.api_version === API_PROTOCOL_VERSION ? 'current' : 'incompatible')
+        } catch {
+          resolve('incompatible')
+        }
+      })
     })
-    request.on('error', () => resolve(false))
-    request.setTimeout(800, () => { request.destroy(); resolve(false) })
+    request.on('error', () => resolve('offline'))
+    request.setTimeout(800, () => { request.destroy(); resolve('offline') })
   })
 }
 
 async function startApi() {
   if (!fs.existsSync(python)) throw new Error(`找不到项目虚拟环境：${python}`)
-  if (await apiIsHealthy()) return
+  const status = await apiStatus()
+  if (status === 'current') return
+  if (status === 'incompatible') throw new Error('6700 端口上的管理服务版本过旧，请先关闭旧管理服务后再启动桌面端')
   apiProcess = spawn(python, ['-m', 'uvicorn', 'server:app', '--host', '127.0.0.1', '--port', '6700'], {
     cwd: adminRoot,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  apiPid = apiProcess.pid
   apiProcess.on('error', error => dialog.showErrorBox('管理服务启动失败', error.message))
   apiProcess.stderr?.on('data', chunk => console.error(`[管理服务] ${String(chunk).trim()}`))
 }
@@ -109,12 +133,33 @@ async function createWindow() {
     frame: false,
     backgroundColor: '#f8fafc',
     autoHideMenuBar: true,
-    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false },
+    ...(iconPath ? { icon: iconPath } : {}),
+    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, webviewTag: true },
   })
   await mainWindow.loadFile(panelDist)
 }
 
+function stopApiProcess() {
+  if (apiStopping) return
+  const pid = apiPid || apiProcess?.pid
+  if (!pid) return
+  apiStopping = true
+  apiProcess = null
+  apiPid = null
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    apiStopping = false
+    return
+  }
+  try {
+    process.kill(pid, 'SIGTERM')
+  } finally {
+    apiStopping = false
+  }
+}
+
 app.whenReady().then(() => createWindow().catch(error => dialog.showErrorBox('QQBot Desktop Launcher', error.message)))
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
-app.on('before-quit', () => { if (apiProcess && !apiProcess.killed) apiProcess.kill() })
+app.on('before-quit', stopApiProcess)
+app.on('will-quit', stopApiProcess)
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import os
 import json
-import subprocess
+import os
 from pathlib import Path
+import subprocess
 
 import psutil
 
-from backend.adapter.process import EventSink, OutputProcessAdapter, terminate_process_tree
+from backend.adapter.process import EventSink, OutputProcessAdapter, find_listening_process, process_command
 import backend.config as runtime_config
 from backend.domain.errors import AdapterUnavailableError
 from backend.domain.models import BotConfig
@@ -20,7 +20,7 @@ class NapCatAdapter(OutputProcessAdapter):
 
     @property
     def available(self) -> bool:
-        return runtime_config.NAPCAT_EXE.exists()
+        return bool(runtime_config.resource_status()["napcat"]["valid"])
 
     def _config_directory(self) -> Path | None:
         napcat_dir = runtime_config.NAPCAT_DIR
@@ -33,7 +33,6 @@ class NapCatAdapter(OutputProcessAdapter):
         return webui.parent if webui else None
 
     def sync_onebot_port(self, bot: BotConfig) -> bool:
-        """Keep NapCat's websocket client pointed at this Bot's NoneBot port."""
         config_directory = self._config_directory()
         if config_directory is None:
             return False
@@ -62,52 +61,21 @@ class NapCatAdapter(OutputProcessAdapter):
                     "verifyCertificate": True,
                 }
                 clients.append(client)
-                client["name"] = bot.name
+            client["name"] = bot.name
             client["url"] = f"ws://127.0.0.1:{bot.port}/onebot/v11/ws"
             config_file.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
             return True
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
             return False
 
-    def external_process(self, bot: BotConfig) -> psutil.Process | None:
-        """Find a NapCat launcher left behind by a previous API instance."""
-        executable_name = runtime_config.NAPCAT_EXE.name.lower()
-        account = str(bot.qq)
-        try:
-            candidates = psutil.process_iter(["pid", "name", "cmdline"])
-        except psutil.Error:
-            return None
-        for process in candidates:
-            try:
-                command_line = [str(item) for item in (process.info.get("cmdline") or [])]
-                command = " ".join(command_line).lower()
-                name = str(process.info.get("name") or "").lower()
-                is_launcher = executable_name in command or name == executable_name
-                if is_launcher and account in command_line:
-                    return process
-            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError):
-                continue
-        return None
-
-    def is_running_for_bot(self, bot: BotConfig) -> bool:
-        return self.is_running(bot.id) or self.external_process(bot) is not None
-
-    async def stop_external(self, bot: BotConfig) -> None:
-        process = self.external_process(bot)
-        if process is not None:
-            await terminate_process_tree(process.pid)
-
     async def start(self, bot: BotConfig, quick_login: str | None = None) -> None:
         if self.is_running_for_bot(bot):
             return
         if not self.available:
-            raise AdapterUnavailableError(f"找不到 NapCat 启动程序：{runtime_config.NAPCAT_EXE}")
-        # Bind every NapCat process to its own QQ profile.  NapCat Shell
-        # supports the QQ number as the first positional argument; omitting it
-        # makes concurrent launches fall back to the same default instance.
-        command = [str(runtime_config.NAPCAT_EXE), quick_login or bot.qq]
-        environment = os.environ.copy()
+            raise AdapterUnavailableError("NapCat 资源不完整：需要同一目录包含 QQ.exe 和 NapCatWinBootMain.exe")
+
         login_account = quick_login or bot.qq
+        environment = os.environ.copy()
         environment["ACCOUNT"] = login_account
         environment["NAPCAT_QUICK_ACCOUNT"] = login_account
         environment["NAPCAT_WEBUI_PREFERRED_PORT"] = str(bot.napcat_port)
@@ -118,11 +86,12 @@ class NapCatAdapter(OutputProcessAdapter):
         else:
             environment.pop("NAPCAT_QUICK_PASSWORD", None)
             environment.pop("NAPCAT_QUICK_PASSWORD_MD5", None)
+
         log_path = self.prepare_log_path(bot)
         start_position = log_path.stat().st_size
         with log_path.open("a", encoding="utf-8", buffering=1) as output:
             process = subprocess.Popen(
-                command,
+                [str(runtime_config.NAPCAT_EXE), login_account],
                 cwd=runtime_config.NAPCAT_DIR,
                 text=True,
                 encoding="utf-8",
@@ -133,3 +102,42 @@ class NapCatAdapter(OutputProcessAdapter):
             )
         self.register(bot, process, start_position)
         await self._sink("INFO", bot.name, "NapCat 已启动，等待 QQ 协议端连接")
+
+    def discover(self, bot: BotConfig) -> psutil.Process | None:
+        tracked = self.tracked_process(bot.id)
+        if tracked is not None:
+            return tracked
+        listener = find_listening_process(bot.napcat_port)
+        if listener is not None:
+            self.attach_external(bot, listener)
+            return listener
+
+        executable_name = runtime_config.NAPCAT_EXE.name.lower()
+        try:
+            candidates = psutil.process_iter(["pid", "name", "cmdline"])
+        except psutil.Error:
+            return None
+        for process in candidates:
+            try:
+                command_line = [str(item) for item in (process.info.get("cmdline") or [])]
+                command = " ".join(command_line).lower()
+                name = str(process.info.get("name") or "").lower()
+                if (executable_name in command or name == executable_name) and bot.qq in command_line:
+                    self.attach_external(bot, process)
+                    return process
+            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError):
+                continue
+        return None
+
+    def external_process(self, bot: BotConfig) -> psutil.Process | None:
+        return self.discover(bot)
+
+    def is_running_for_bot(self, bot: BotConfig) -> bool:
+        return self.discover(bot) is not None
+
+    def process_ids_for_bot(self, bot: BotConfig) -> set[int]:
+        pids = self.process_ids(bot.id)
+        process = self.discover(bot)
+        if process is not None:
+            pids.add(process.pid)
+        return pids

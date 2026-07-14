@@ -153,6 +153,8 @@ class MessageStatsRepository:
     @staticmethod
     def _direction_and_type(message: str) -> tuple[str | None, str]:
         plain = _strip_ansi(message)
+        if re.search(r"OneBot V11\b.*\[message\.(?:group|private)\.", plain, flags=re.IGNORECASE):
+            return "received", _message_type(plain)
         if re.search(r"接收\s*<-", plain):
             return "received", _message_type(plain)
         if re.search(r"发送\s*->", plain):
