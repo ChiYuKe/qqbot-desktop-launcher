@@ -10,6 +10,10 @@ import './styles.css'
 import './layout.css'
 
 const API_BASE = `http://${window.location.hostname || '127.0.0.1'}:6700`
+
+function apiToken() {
+  return window.desktopInfo?.apiToken || import.meta.env.VITE_QQ_CONSOLE_TOKEN || ''
+}
 const fallbackBots = []
 const fallbackLogs = []
 const fallbackStats = { periods: {}, bots: {}, series: [], updated_at: null }
@@ -218,10 +222,15 @@ async function api(path, options) {
   const controller = new AbortController()
   const timeout = window.setTimeout(() => controller.abort(), 15000)
   try {
+    const token = apiToken()
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
       signal: controller.signal,
-      headers: { 'Content-Type': 'application/json', ...(options?.headers || {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options?.headers || {}),
+      },
     })
     const payload = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(payload.detail || `请求失败 (${response.status})`)
@@ -347,7 +356,8 @@ function App() {
 
     const connect = () => {
       if (disposed) return
-      socket = new WebSocket(`ws://${host}:6700/ws/events`)
+      const token = apiToken()
+      socket = new WebSocket(`ws://${host}:6700/ws/events`, token ? [token] : [])
       socket.onmessage = (message) => {
         try {
           const payload = JSON.parse(message.data)
@@ -458,11 +468,6 @@ function App() {
     })
     await loadDashboard()
     notify(password ? '密码回退已保存，重启 Bot 后生效' : '密码回退已清除')
-  }
-
-  const revealPassword = async (bot) => {
-    const payload = await api(`/api/bots/${bot.id}/password`)
-    return payload.password || ''
   }
 
   const savePort = async (bot, port) => {
@@ -603,7 +608,7 @@ function App() {
       </aside>
 
       <main className={`main-content ${active === '运行状态' ? 'runtime-mode' : ''}`}>
-        {active === '系统设置' ? <SettingsPage theme={theme} onThemeChange={setTheme} onBack={() => setActive('QQ 账号')} onNotice={notify} /> : active === '运行状态' ? <RuntimeStatusPage bots={bots} system={system} stats={stats} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); setActive('QQ 账号') }} /> : active === '插件管理' ? <PluginPage plugins={plugins} project={pluginProject} refreshing={refreshing} onRefresh={refresh} busy={busy} onToggle={togglePlugin} /> : active === 'NapCat' ? <ResourcePage key="napcat" kind="napcat" resource={resources?.napcat} officialUrl={OFFICIAL_RESOURCE_URLS.napcat} setup={resourceSetup} onOpenSetup={() => setResourceSetupOpen(true)} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onBack={() => setActive('QQ 账号')} /> : active === 'NoneBot' ? <ResourcePage key="nonebot" kind="nonebot" resource={resources?.nonebot} officialUrl={OFFICIAL_RESOURCE_URLS.nonebot} setup={resourceSetup} onOpenSetup={() => setResourceSetupOpen(true)} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onBack={() => setActive('QQ 账号')} /> : isAccountPage ? <AccountWorkspace bots={bots} selectedBot={selectedBot} selectedBotId={selectedBotId} setSelectedBotId={setSelectedBotId} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onCreate={() => setCreateOpen(true)} onDelete={() => setDeleteTarget(selectedBot)} logs={logs} logsPaused={logsPaused} onTogglePause={() => { setLogsPaused(value => !value); notify(logsPaused ? '日志同步已恢复' : '日志同步已暂停') }} onClear={clearLogs} onCommand={sendCommand} onSavePassword={savePassword} onRevealPassword={revealPassword} onSavePort={savePort} onSaveNapcatPort={saveNapcatPort} onNotice={notify} /> : <PlaceholderPage active={active} onBack={() => setActive('QQ 账号')} />}
+        {active === '系统设置' ? <SettingsPage theme={theme} onThemeChange={setTheme} onBack={() => setActive('QQ 账号')} onNotice={notify} /> : active === '运行状态' ? <RuntimeStatusPage bots={bots} system={system} stats={stats} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); setActive('QQ 账号') }} /> : active === '插件管理' ? <PluginPage plugins={plugins} project={pluginProject} refreshing={refreshing} onRefresh={refresh} busy={busy} onToggle={togglePlugin} /> : active === 'NapCat' ? <ResourcePage key="napcat" kind="napcat" resource={resources?.napcat} officialUrl={OFFICIAL_RESOURCE_URLS.napcat} setup={resourceSetup} onOpenSetup={() => setResourceSetupOpen(true)} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onBack={() => setActive('QQ 账号')} /> : active === 'NoneBot' ? <ResourcePage key="nonebot" kind="nonebot" resource={resources?.nonebot} officialUrl={OFFICIAL_RESOURCE_URLS.nonebot} setup={resourceSetup} onOpenSetup={() => setResourceSetupOpen(true)} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onBack={() => setActive('QQ 账号')} /> : isAccountPage ? <AccountWorkspace bots={bots} selectedBot={selectedBot} selectedBotId={selectedBotId} setSelectedBotId={setSelectedBotId} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onCreate={() => setCreateOpen(true)} onDelete={() => setDeleteTarget(selectedBot)} logs={logs} logsPaused={logsPaused} onTogglePause={() => { setLogsPaused(value => !value); notify(logsPaused ? '日志同步已恢复' : '日志同步已暂停') }} onClear={clearLogs} onCommand={sendCommand} onSavePassword={savePassword} onSavePort={savePort} onSaveNapcatPort={saveNapcatPort} onNotice={notify} /> : <PlaceholderPage active={active} onBack={() => setActive('QQ 账号')} />}
       </main>
     </div>
 
@@ -617,6 +622,44 @@ function App() {
 function WindowControls() {
   if (!window.desktopInfo?.isDesktop) return null
   return <div className="window-controls"><button onClick={() => window.windowControls?.minimize()} aria-label="最小化" title="最小化"><Minimize2 size={14} /></button><button onClick={() => window.windowControls?.toggleMaximize()} aria-label="最大化" title="最大化"><Maximize2 size={14} /></button><button className="window-close" onClick={() => window.windowControls?.close()} aria-label="关闭" title="关闭"><X size={15} /></button></div>
+}
+
+async function fetchAuthenticatedBlob(path) {
+  const token = apiToken()
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}))
+    throw new Error(payload.detail || `资源请求失败 (${response.status})`)
+  }
+  return response.blob()
+}
+
+function useAuthenticatedMedia(path, enabled) {
+  const [url, setUrl] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    let objectUrl = ''
+    setUrl('')
+    setError('')
+    if (!enabled) return () => {}
+    fetchAuthenticatedBlob(path).then((blob) => {
+      if (!active) return
+      objectUrl = URL.createObjectURL(blob)
+      setUrl(objectUrl)
+    }).catch((reason) => {
+      if (active) setError(reason.message || '资源加载失败')
+    })
+    return () => {
+      active = false
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [path, enabled])
+
+  return { url, error }
 }
 
 function NavItem({ icon: Icon, label, active, onClick, favoriteKey, favorite, onToggleFavorite }) {
@@ -686,7 +729,7 @@ function PluginPage({ plugins, project, refreshing, onRefresh, busy, onToggle })
   </section>
 }
 
-function AccountWorkspace({ bots, selectedBot, selectedBotId, setSelectedBotId, napcat, online, refreshing, refresh, busy, action, onCreate, onDelete, logs, logsPaused, onTogglePause, onClear, onCommand, onSavePassword, onRevealPassword, onSavePort, onSaveNapcatPort, onNotice }) {
+function AccountWorkspace({ bots, selectedBot, selectedBotId, setSelectedBotId, napcat, online, refreshing, refresh, busy, action, onCreate, onDelete, logs, logsPaused, onTogglePause, onClear, onCommand, onSavePassword, onSavePort, onSaveNapcatPort, onNotice }) {
   const [command, setCommand] = useState('')
   const [detailView, setDetailView] = useState('overview')
   const [visibleQrKey, setVisibleQrKey] = useState('')
@@ -736,30 +779,26 @@ function AccountWorkspace({ bots, selectedBot, selectedBotId, setSelectedBotId, 
           {detailView === 'overview' ? <>
           <div className="account-summary"><div className="summary-row"><span>状态</span><StatusPill label={botStatusLabel(selectedBot)} state={botStatusState(selectedBot)} /></div><div className="summary-row"><span>QQ 号</span><b className="summary-value mono">{selectedBot.qq}</b></div><div className="summary-row"><span>NapCat</span><StatusPill label={!napcat.available ? '未找到' : selectedBot.runtime?.napcat?.running ? '运行中' : '待启动'} state={!napcat.available ? 'red' : selectedBot.runtime?.napcat?.running ? 'green' : 'muted'} /></div><div className="summary-row"><span>NoneBot</span><StatusPill label={selectedBot.runtime?.onebot?.running ? '运行中' : '待启动'} state={selectedBot.runtime?.onebot?.running ? 'green' : 'muted'} /></div><div className="summary-row"><span>OneBot 端口</span><b className="summary-value mono">{selectedBot.port || '—'}</b></div><div className="summary-row"><span>NapCat WebUI</span><b className="summary-value mono">{selectedBot.napcat_port || '—'}</b></div></div>
           <div className="conversation"><div className="conversation-header"><div><h3>实时活动</h3><span>{logsPaused ? '日志同步已暂停' : '来自本机服务的最新状态'}</span></div><div className="conversation-tools"><button className="plain-icon" onClick={onTogglePause} aria-label={logsPaused ? '恢复日志' : '暂停日志'} title={logsPaused ? '恢复日志更新' : '暂停日志更新'}>{logsPaused ? <Play size={15} /> : <Pause size={15} />}</button><button className="plain-icon" onClick={onClear} aria-label="清空日志" title="清空日志"><Trash2 size={15} /></button></div></div>{verification && <LoginVerificationCard verification={verification} onRetry={async () => { try { await onCommand(selectedBot, `-q ${selectedBot.qq}`, botLogs); onNotice('已重新尝试登录，请等待二维码或登录结果') } catch (error) { onNotice(`重新登录失败：${error.message}`) } }} onNotice={onNotice} />}<div className="activity-feed" ref={feedRef} onScroll={() => { const feed = feedRef.current; if (feed) followLogsRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 24 }}>{visibleLogs.length ? visibleLogs.map((log, index) => { const qrKey = `${log.time}-${log.source}-${index}`; return <LogItem key={qrKey} log={log} qrVisible={visibleQrKey === qrKey} onToggleQr={() => setVisibleQrKey(visibleQrKey === qrKey ? '' : qrKey)} /> }) : <div className="activity-empty">暂无日志</div>}</div><div className="command-box"><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="输入 -q 2 快速登录…" onKeyDown={(event) => { if (event.key === 'Enter') submitCommand() }} /><button onClick={submitCommand} aria-label="发送"><Play size={14} /></button></div></div>
-          </> : <AccountConfig bot={selectedBot} onSavePassword={onSavePassword} onRevealPassword={onRevealPassword} onSavePort={onSavePort} onSaveNapcatPort={onSaveNapcatPort} onNotice={onNotice} />}
+           </> : <AccountConfig bot={selectedBot} onSavePassword={onSavePassword} onSavePort={onSavePort} onSaveNapcatPort={onSaveNapcatPort} onNotice={onNotice} />}
         </div>
       </> : <EmptyDetail onCreate={onCreate} />}
     </div>
   </section>
 }
 
-function AccountConfig({ bot, onSavePassword, onRevealPassword, onSavePort, onSaveNapcatPort, onNotice }) {
+function AccountConfig({ bot, onSavePassword, onSavePort, onSaveNapcatPort, onNotice }) {
   const [password, setPassword] = useState('')
-  const [revealedPassword, setRevealedPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
   const [passwordEditing, setPasswordEditing] = useState(false)
   const [port, setPort] = useState(String(bot.port || ''))
   const [napcatPort, setNapcatPort] = useState(String(bot.napcat_port || ''))
   const [savingPassword, setSavingPassword] = useState(false)
   const [savingPort, setSavingPort] = useState(false)
   const [savingNapcatPort, setSavingNapcatPort] = useState(false)
-  const [loadingPassword, setLoadingPassword] = useState(false)
 
   useEffect(() => {
     setPort(String(bot.port || ''))
     setNapcatPort(String(bot.napcat_port || ''))
-    setRevealedPassword('')
-    setShowPassword(false)
+    setPassword('')
     setPasswordEditing(false)
   }, [bot.id, bot.port, bot.napcat_port])
 
@@ -773,8 +812,6 @@ function AccountConfig({ bot, onSavePassword, onRevealPassword, onSavePort, onSa
     try {
       await onSavePassword(bot, password)
       setPassword('')
-      setRevealedPassword('')
-      setShowPassword(false)
       setPasswordEditing(false)
     } catch (error) {
       onNotice(`保存失败：${error.message}`)
@@ -809,24 +846,7 @@ function AccountConfig({ bot, onSavePassword, onRevealPassword, onSavePort, onSa
     }
   }
 
-  const togglePassword = async () => {
-    if (passwordEditing || !bot.password_configured) return
-    if (showPassword) {
-      setShowPassword(false)
-      return
-    }
-    setLoadingPassword(true)
-    try {
-      setRevealedPassword(await onRevealPassword(bot))
-      setShowPassword(true)
-    } catch (error) {
-      onNotice(`读取密码失败：${error.message}`)
-    } finally {
-      setLoadingPassword(false)
-    }
-  }
-
-  return <div className="config-panel"><div className="config-heading"><div><div className="eyebrow">账号配置</div><h3>连接与登录</h3><p>为「{bot.name}」管理 OneBot、NapCat WebUI 端口和密码回退。</p></div><StatusPill label={bot.password_configured ? '已设置密码' : '未设置密码'} state={bot.password_configured ? 'green' : 'muted'} /></div><form className="config-card" onSubmit={save}><div className="config-card-title"><div><strong>密码回退</strong><span>可选配置</span></div><span className="config-status">{bot.password_configured ? '当前已配置' : '当前未配置'}</span></div><label className="config-field">登录密码<span className="password-input-wrap"><input type={showPassword ? 'text' : 'password'} maxLength="256" autoComplete="new-password" placeholder={bot.password_configured && !passwordEditing ? '••••••••  已设置，点击输入框可覆盖' : '留空则使用二维码登录'} value={passwordEditing ? password : (bot.password_configured ? (showPassword ? revealedPassword : '••••••••') : '')} readOnly={bot.password_configured && !passwordEditing} onFocus={() => { if (!passwordEditing) { setPasswordEditing(true); setPassword(''); setShowPassword(false); setRevealedPassword('') } }} onChange={event => setPassword(event.target.value)} /><button type="button" className="password-toggle" onClick={togglePassword} disabled={loadingPassword || passwordEditing || !bot.password_configured} aria-label={showPassword ? '隐藏密码' : '显示密码'} title={showPassword ? '隐藏密码' : '显示密码'}>{showPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></span><small>已设置密码默认掩码；点击眼睛可查看，点击输入框后可覆盖，清空后保存会清除密码。</small></label><div className="config-actions"><button type="submit" className="action-button" disabled={savingPassword}>{savingPassword ? '保存中…' : '保存密码'}</button></div></form><form className="config-card" onSubmit={savePort}><div className="config-card-title"><div><strong>OneBot 连接端口</strong><span>NoneBot 服务</span></div><span className="config-status">当前 {bot.port}</span></div><label className="config-field">本地端口<input required type="number" min="1024" max="65535" value={port} onChange={event => setPort(event.target.value)} /><small>保存后会同步 NapCat 的 OneBot WebSocket 地址，重启 Bot 后生效。</small></label><div className="config-actions"><button type="submit" className="action-button" disabled={savingPort || !port}>{savingPort ? '保存中…' : '保存端口'}</button></div></form><form className="config-card" onSubmit={saveNapcatPort}><div className="config-card-title"><div><strong>NapCat WebUI 端口</strong><span>登录面板</span></div><span className="config-status">当前 {bot.napcat_port}</span></div><label className="config-field">本地端口<input required type="number" min="1024" max="65535" value={napcatPort} onChange={event => setNapcatPort(event.target.value)} /><small>用于打开 NapCat WebUI 登录面板；保存后需重启 Bot。</small></label><div className="config-actions"><button type="submit" className="action-button" disabled={savingNapcatPort || !napcatPort}>{savingNapcatPort ? '保存中…' : '保存端口'}</button></div></form></div>
+  return <div className="config-panel"><div className="config-heading"><div><div className="eyebrow">账号配置</div><h3>连接与登录</h3><p>为「{bot.name}」管理 OneBot、NapCat WebUI 端口和密码回退。</p></div><StatusPill label={bot.password_configured ? '已设置密码' : '未设置密码'} state={bot.password_configured ? 'green' : 'muted'} /></div><form className="config-card" onSubmit={save}><div className="config-card-title"><div><strong>密码回退</strong><span>可选配置</span></div><span className="config-status">{bot.password_configured ? '当前已配置' : '当前未配置'}</span></div><label className="config-field">登录密码<span className="password-input-wrap"><input type="password" maxLength="256" autoComplete="new-password" placeholder={bot.password_configured && !passwordEditing ? '已设置，输入新密码可覆盖' : '留空则使用二维码登录'} value={password} readOnly={bot.password_configured && !passwordEditing} onFocus={() => { if (!passwordEditing) { setPasswordEditing(true); setPassword('') } }} onChange={event => setPassword(event.target.value)} /></span><small>密码只支持覆盖或清除，不提供读取原密码功能。</small></label><div className="config-actions"><button type="submit" className="action-button" disabled={savingPassword}>{savingPassword ? '保存中…' : '保存密码'}</button></div></form><form className="config-card" onSubmit={savePort}><div className="config-card-title"><div><strong>OneBot 连接端口</strong><span>NoneBot 服务</span></div><span className="config-status">当前 {bot.port}</span></div><label className="config-field">本地端口<input required type="number" min="1024" max="65535" value={port} onChange={event => setPort(event.target.value)} /><small>保存后会同步 NapCat 的 OneBot WebSocket 地址，重启 Bot 后生效。</small></label><div className="config-actions"><button type="submit" className="action-button" disabled={savingPort || !port}>{savingPort ? '保存中…' : '保存端口'}</button></div></form><form className="config-card" onSubmit={saveNapcatPort}><div className="config-card-title"><div><strong>NapCat WebUI 端口</strong><span>登录面板</span></div><span className="config-status">当前 {bot.napcat_port}</span></div><label className="config-field">本地端口<input required type="number" min="1024" max="65535" value={napcatPort} onChange={event => setNapcatPort(event.target.value)} /><small>用于打开 NapCat WebUI 登录面板；保存后需重启 Bot。</small></label><div className="config-actions"><button type="submit" className="action-button" disabled={savingNapcatPort || !napcatPort}>{savingNapcatPort ? '保存中…' : '保存端口'}</button></div></form></div>
 }
 
 function AccountListItem({ bot, selected, onClick }) {
@@ -1021,12 +1041,26 @@ function ImageMessage({ image }) {
   const [open, setOpen] = useState(false)
   const [failed, setFailed] = useState(false)
   const filename = image.file || 'qq-image'
-  const cacheUrl = `${API_BASE}/api/media/cache?file=${encodeURIComponent(filename)}`
-  const previewUrl = image.truncated ? cacheUrl : image.url
-  const downloadUrl = `${API_BASE}/api/media/download?url=${encodeURIComponent(image.url)}&filename=${encodeURIComponent(filename)}`
-  const saveUrl = image.truncated ? `${cacheUrl}&download=1` : downloadUrl
+  const cachePath = `/api/media/cache?file=${encodeURIComponent(filename)}`
+  const downloadPath = `/api/media/download?url=${encodeURIComponent(image.url)}&filename=${encodeURIComponent(filename)}`
+  const cache = useAuthenticatedMedia(cachePath, open && image.truncated)
 
-  return <span className="log-image-message"><button type="button" className="image-message-button" onClick={() => setOpen(value => !value)} aria-expanded={open}><ImageIcon size={14} /><span>{image.summary}</span><small>{open ? '收起' : '查看图片'}</small></button>{open && <span className="image-message-panel"><span className="image-message-preview">{failed ? <span className="image-message-error">{image.truncated ? '日志里的图片链接已被 NoneBot 截断，且本地没有可用缓存' : '图片加载失败，请打开原链接查看'}</span> : <img src={previewUrl} alt={image.summary} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />}</span><span className="image-message-meta">{image.file}{image.size ? ` · ${image.size} bytes` : ''}</span><span className="image-message-url"><a href={image.url} onClick={(event) => { event.preventDefault(); openExternal(image.url) }} title="打开原链接">{image.url}</a></span><span className="image-message-actions"><a className="image-message-action" href={image.url} onClick={(event) => { event.preventDefault(); openExternal(image.url) }}><ExternalLink size={13} />原链接</a><a className="image-message-action" href={saveUrl} download={filename}><Download size={13} />保存图片</a></span></span>}</span>
+  const saveImage = async (event) => {
+    event.preventDefault()
+    try {
+      const blob = await fetchAuthenticatedBlob(image.truncated ? `${cachePath}&download=1` : downloadPath)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = filename
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      setFailed(true)
+    }
+  }
+
+  return <span className="log-image-message"><button type="button" className="image-message-button" onClick={() => setOpen(value => !value)} aria-expanded={open}><ImageIcon size={14} /><span>{image.summary}</span><small>{open ? '收起' : '查看图片'}</small></button>{open && <span className="image-message-panel"><span className="image-message-preview">{failed || cache.error ? <span className="image-message-error">{image.truncated ? '日志里的图片链接已被 NoneBot 截断，且本地没有可用缓存' : '图片加载失败，请打开原链接查看'}</span> : image.truncated && !cache.url ? <span className="image-message-error">正在加载图片…</span> : <img src={image.truncated ? cache.url : image.url} alt={image.summary} loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} />}</span><span className="image-message-meta">{image.file}{image.size ? ` · ${image.size} bytes` : ''}</span><span className="image-message-url"><a href={image.url} onClick={(event) => { event.preventDefault(); openExternal(image.url) }} title="打开原链接">{image.url}</a></span><span className="image-message-actions"><a className="image-message-action" href={image.url} onClick={(event) => { event.preventDefault(); openExternal(image.url) }}><ExternalLink size={13} />原链接</a><a className="image-message-action" href={image.url} onClick={saveImage}><Download size={13} />保存图片</a></span></span>}</span>
 }
 
 function renderLogMessage(message) {
@@ -1037,53 +1071,27 @@ function renderLogMessage(message) {
 
 function LogItem({ log, qrVisible, onToggleQr }) {
   const level = normalizeLogLevel(log.level, log.message)
-  return <div className={`log-item ${log.kind === 'qr' ? 'qr-log-item' : ''}`}><div className={`log-dot ${level}`} /><div className="log-copy">{log.kind === 'qr' ? <><div className="log-meta"><time>{log.time}</time><strong>[{log.source}]</strong></div>{qrVisible ? <div className="qr-card"><img src={`${API_BASE}/api/napcat/qrcode?time=${encodeURIComponent(log.time)}`} alt="NapCat 登录二维码" /><span>使用手机 QQ 扫描此二维码登录</span><button type="button" className="qr-reveal" onClick={onToggleQr}>隐藏二维码</button></div> : <button type="button" className="qr-reveal" onClick={onToggleQr}>登录二维码已就绪 · 点击显示</button>}</> : <div className="log-line"><time>{log.time}</time><strong>[{log.source}]</strong><span className={`log-level-${level}`}>{renderLogMessage(log.message)}</span></div>}</div></div>
+  return <div className={`log-item ${log.kind === 'qr' ? 'qr-log-item' : ''}`}><div className={`log-dot ${level}`} /><div className="log-copy">{log.kind === 'qr' ? <><div className="log-meta"><time>{log.time}</time><strong>[{log.source}]</strong></div>{qrVisible ? <div className="qr-card"><AuthenticatedQr time={log.time} /><span>使用手机 QQ 扫描此二维码登录</span><button type="button" className="qr-reveal" onClick={onToggleQr}>隐藏二维码</button></div> : <button type="button" className="qr-reveal" onClick={onToggleQr}>登录二维码已就绪 · 点击显示</button>}</> : <div className="log-line"><time>{log.time}</time><strong>[{log.source}]</strong><span className={`log-level-${level}`}>{renderLogMessage(log.message)}</span></div>}</div></div>
+}
+
+function AuthenticatedQr({ time }) {
+  const media = useAuthenticatedMedia(`/api/napcat/qrcode?time=${encodeURIComponent(time)}`, true)
+  if (media.error) return <span className="image-message-error">二维码加载失败</span>
+  return media.url ? <img src={media.url} alt="NapCat 登录二维码" /> : <span className="image-message-error">二维码加载中…</span>
 }
 
 function ResourcePage({ kind, resource, setup, onOpenSetup, onSelect, onRefresh, onBack, officialUrl }) {
-  const [browserUrl, setBrowserUrl] = useState('')
   const isNapCat = kind === 'napcat'
   const title = isNapCat ? 'NapCat' : 'NoneBot'
   const description = isNapCat ? 'QQ 协议端与 WebUI 运行资源' : 'NoneBot2 机器人运行环境与插件项目'
   const unavailable = !resource
   const valid = Boolean(resource?.valid)
   const missing = resource?.missing
-  if (browserUrl) return <section className="resource-page browser-mode"><InternalBrowser title={title} url={browserUrl} onClose={() => setBrowserUrl('')} /></section>
   const statusTitle = unavailable ? '等待管理 API' : valid ? `${title} 已就绪` : missing === 'qq' ? '缺少 QQ 主程序' : `尚未配置 ${title}`
   const statusDescription = unavailable ? '暂时无法读取本机资源状态，请检查管理服务连接。' : valid ? '控制台可以使用该资源启动 Bot。' : missing === 'qq' ? 'NapCat 启动器已找到，但同一目录缺少 QQ.exe。请先安装 QQ，或选择已有 QQ/NapCat 目录。' : `请选择本机已有的 ${title} 目录，或打开官方页面下载。`
   const pathLabel = unavailable ? '等待管理 API' : resource.path || '尚未选择目录'
   const pathState = unavailable ? '状态未知' : valid ? '路径有效' : missing === 'qq' ? '缺少 QQ.exe' : '路径无效或不存在'
-  return <section className="resource-page"><div className="resource-page-header"><div><button className="resource-back" onClick={onBack}><RotateCcw size={14} />返回 QQ 账号</button><div className="eyebrow">运行资源</div><h1>{title}</h1><p>{description}</p></div><div className="resource-page-actions"><button className="action-button" onClick={onOpenSetup} disabled={unavailable}><Download size={15} />{setup?.status === 'running' ? '查看配置进度' : '一键配置'}</button><button className="plain-icon" onClick={onRefresh} aria-label="刷新资源状态"><RefreshCw size={16} /></button></div></div><div className={`resource-status-card ${valid ? 'ready' : unavailable ? 'unavailable' : 'missing'}`}><div className="resource-status-icon">{valid ? <Check size={22} /> : <FolderOpen size={22} />}</div><div><strong>{statusTitle}</strong><span>{statusDescription}</span></div><span className="resource-status-pill">{unavailable ? '状态未知' : valid ? '已就绪' : '待设置'}</span></div><section className="resource-card"><div className="resource-card-heading"><div><h2>资源目录</h2><p>控制台会从此目录读取并启动 {title}。</p></div><span className="resource-path-state">{pathState}</span></div><div className="resource-path"><FolderOpen size={16} /><span title={pathLabel}>{pathLabel}</span></div><div className="resource-actions"><button className="secondary" onClick={() => onSelect(kind)} disabled={unavailable}><FolderOpen size={15} />选择本地目录</button><button className="secondary" onClick={() => officialUrl && setBrowserUrl(officialUrl)}><Download size={15} />打开官方获取页<ExternalLink size={13} /></button></div></section><section className="resource-help"><strong>首次使用建议</strong><p>一键配置会打开完整流程：NoneBot 固定执行，NapCat 等协议端按需选择。也可以先手动下载，再选择已有目录。</p></section></section>
-}
-
-function InternalBrowser({ title, url, onClose }) {
-  const frameRef = useRef(null)
-  const [currentUrl, setCurrentUrl] = useState(url)
-  const [reloadKey, setReloadKey] = useState(0)
-  const isDesktop = Boolean(window.desktopInfo?.isDesktop)
-
-  useEffect(() => {
-    setCurrentUrl(url)
-  }, [url])
-
-  useEffect(() => {
-    const frame = frameRef.current
-    if (!isDesktop || !frame) return undefined
-    const updateUrl = () => setCurrentUrl(frame.getURL?.() || url)
-    frame.addEventListener('did-navigate', updateUrl)
-    frame.addEventListener('did-navigate-in-page', updateUrl)
-    return () => {
-      frame.removeEventListener('did-navigate', updateUrl)
-      frame.removeEventListener('did-navigate-in-page', updateUrl)
-    }
-  }, [isDesktop, url, reloadKey])
-
-  const reload = () => {
-    if (isDesktop) frameRef.current?.reload()
-    else setReloadKey((key) => key + 1)
-  }
-
-  return <section className="internal-browser"><div className="internal-browser-toolbar"><button className="plain-icon" onClick={onClose} aria-label={`返回 ${title}`} title={`返回 ${title}`}><ArrowLeft size={16} /></button><div className="internal-browser-address" title={currentUrl}>{currentUrl}</div><button className="plain-icon" onClick={reload} aria-label="刷新页面" title="刷新页面"><RefreshCw size={15} /></button><button className="plain-icon" onClick={() => openExternal(currentUrl)} aria-label="在系统浏览器打开" title="在系统浏览器打开"><ExternalLink size={15} /></button><button className="plain-icon" onClick={onClose} aria-label="关闭浏览器" title="关闭浏览器"><X size={16} /></button></div><div className="internal-browser-frame">{isDesktop ? <webview ref={frameRef} key={reloadKey} src={url} partition="persist:qq-console-browser" allowpopups="false" /> : <iframe key={reloadKey} src={url} title={`${title} 官方页面`} referrerPolicy="no-referrer" />}</div></section>
+  return <section className="resource-page"><div className="resource-page-header"><div><button className="resource-back" onClick={onBack}><RotateCcw size={14} />返回 QQ 账号</button><div className="eyebrow">运行资源</div><h1>{title}</h1><p>{description}</p></div><div className="resource-page-actions"><button className="action-button" onClick={onOpenSetup} disabled={unavailable}><Download size={15} />{setup?.status === 'running' ? '查看配置进度' : '一键配置'}</button><button className="plain-icon" onClick={onRefresh} aria-label="刷新资源状态"><RefreshCw size={16} /></button></div></div><div className={`resource-status-card ${valid ? 'ready' : unavailable ? 'unavailable' : 'missing'}`}><div className="resource-status-icon">{valid ? <Check size={22} /> : <FolderOpen size={22} />}</div><div><strong>{statusTitle}</strong><span>{statusDescription}</span></div><span className="resource-status-pill">{unavailable ? '状态未知' : valid ? '已就绪' : '待设置'}</span></div><section className="resource-card"><div className="resource-card-heading"><div><h2>资源目录</h2><p>控制台会从此目录读取并启动 {title}。</p></div><span className="resource-path-state">{pathState}</span></div><div className="resource-path"><FolderOpen size={16} /><span title={pathLabel}>{pathLabel}</span></div><div className="resource-actions"><button className="secondary" onClick={() => onSelect(kind)} disabled={unavailable}><FolderOpen size={15} />选择本地目录</button><button className="secondary" onClick={() => officialUrl && openExternal(officialUrl)}><Download size={15} />打开官方获取页<ExternalLink size={13} /></button></div></section><section className="resource-help"><strong>首次使用建议</strong><p>一键配置会打开完整流程：NoneBot 固定执行，NapCat 等协议端按需选择。也可以先手动下载，再选择已有目录。</p></section></section>
 }
 
 function ResourceSetupModal({ resources, setup, onSetup, onSelect, onRefresh, onClose }) {

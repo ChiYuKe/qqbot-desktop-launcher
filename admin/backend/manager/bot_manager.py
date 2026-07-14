@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from backend.adapter.napcat import NapCatAdapter
 from backend.adapter.onebot import OneBotAdapter
-from backend.adapter.process import terminate_processes
+from backend.adapter.process import find_listening_process, terminate_processes
 from backend.database.repository import BotRepository
 from backend.database.stats_repository import MessageStatsRepository
 from backend.domain.errors import BotNotFoundError, ConflictError, OperationError
@@ -323,10 +323,19 @@ class BotManager:
             await self.napcat.start(bot, quick_login=quick_login or bot.qq)
         try:
             await self.onebot.start(bot)
+            await self._wait_for_ready(bot)
         except Exception:
             await self._stop_now(bot)
             raise
         self._invalidate_probe(bot.id)
+
+    async def _wait_for_ready(self, bot: BotConfig, timeout: float = 20.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if find_listening_process(bot.port) is not None and self.onebot.discover(bot) is not None:
+                return
+            await asyncio.sleep(0.25)
+        raise OperationError(f"Bot「{bot.name}」启动超时：NoneBot 未在端口 {bot.port} 监听")
 
     async def _stop_now(self, bot: BotConfig) -> None:
         pids = self.onebot.process_ids_for_bot(bot) | self.napcat.process_ids_for_bot(bot)
@@ -368,6 +377,7 @@ class BotManager:
                 await self.napcat.start(bot, quick_login=qq)
             if self.onebot.discover(bot) is None:
                 await self.onebot.start(bot)
+            await self._wait_for_ready(bot)
             runtime.login_state = "unknown"
             self._invalidate_probe(bot.id)
             operation.status = "succeeded"
@@ -415,8 +425,8 @@ class BotManager:
         tasks = tuple(self._tasks.values())
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        bots = self.repository.list()
-        await asyncio.gather(*(self._stop_now(bot) for bot in bots), return_exceptions=True)
+        # Only processes started by this backend belong to its shutdown scope.
+        # Discovered external processes must remain available for the next session.
         await self.onebot.shutdown()
         await self.napcat.shutdown()
 

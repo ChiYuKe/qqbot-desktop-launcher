@@ -61,7 +61,7 @@ class StatsRecordPayload(BaseModel):
 router = APIRouter(prefix="/api")
 _MEDIA_HOSTS = {"multimedia.nt.qq.com.cn", "gchat.qpic.cn", "c2cpicdw.qpic.cn"}
 _MAX_MEDIA_BYTES = 20 * 1024 * 1024
-API_PROTOCOL_VERSION = 2
+API_PROTOCOL_VERSION = 3
 
 
 def service(request: Request):
@@ -120,6 +120,15 @@ async def start_runtime_setup(request: Request, payload: ResourceSetupPayload | 
 @router.get("/runtime/setup/{job_id}")
 async def runtime_setup_status(job_id: str, request: Request) -> dict[str, Any]:
     return service(request).resource_setup_status(job_id)
+
+
+@router.post("/internal/shutdown")
+async def request_shutdown(request: Request) -> dict[str, bool]:
+    server = getattr(request.app.state, "uvicorn_server", None)
+    if server is None:
+        raise HTTPException(503, "当前管理服务不支持优雅关闭")
+    server.should_exit = True
+    return {"ok": True}
 
 
 @router.get("/plugins")
@@ -284,16 +293,6 @@ async def update_bot_password(bot_id: str, payload: BotPasswordPayload, request:
     try:
         await service(request).update_password(bot_id, payload.password)
         return {"ok": True}
-    except DomainError as error:
-        raise HTTPException(error.status_code, str(error)) from error
-    except ValueError as error:
-        raise HTTPException(400, str(error)) from error
-
-
-@router.get("/bots/{bot_id}/password")
-async def reveal_bot_password(bot_id: str, request: Request) -> dict[str, str]:
-    try:
-        return {"password": service(request).get_password(bot_id)}
     except DomainError as error:
         raise HTTPException(error.status_code, str(error)) from error
     except ValueError as error:

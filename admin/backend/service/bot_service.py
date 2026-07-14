@@ -12,7 +12,7 @@ from backend.domain.errors import ConflictError
 from backend.domain.models import BotConfig
 from backend.event.bus import EventBus
 from backend.manager.bot_manager import BotManager
-from backend.security.secrets import protect_secret, reveal_secret
+from backend.security.secrets import protect_secret
 from backend.service.resource_setup import ResourceSetupManager
 
 
@@ -93,13 +93,6 @@ class BotService:
         bot = self.manager.get(bot_id)
         self.repository.update_password(bot_id, protect_secret(password))
         await self.event_bus.publish("INFO", bot.name, "已更新密码回退配置")
-
-    def get_password(self, bot_id: str) -> str:
-        bot = self.manager.get(bot_id)
-        try:
-            return reveal_secret(bot.password_secret)
-        except RuntimeError as error:
-            raise ValueError(str(error)) from error
 
     async def update_port(self, bot_id: str, port: int) -> None:
         bot = self.manager.get(bot_id)
