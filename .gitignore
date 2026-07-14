@@ -1,0 +1,74 @@
+# ===== 第三方捆绑软件 =====
+program/
+
+# ===== 包管理器依赖 =====
+node_modules/
+.venv/
+venv/
+
+# ===== Python 字节码 =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# ===== 运行时数据 =====
+data/
+
+# SQLite 运行时文件
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.sqlite-shm
+*.sqlite-wal
+
+# 日志文件
+*.log
+
+# ===== 构建产物 =====
+dist/
+build/
+release/
+
+# Vite 缓存
+.vite/
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ===== 系统文件 =====
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ===== 环境变量（含敏感信息）=====
+.env
+.env.*
+!.env.example
+
+# ===== 证书与密钥 =====
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ===== 临时文件 =====
+*.tmp
+*.temp
+*.bak
+*.pid
+*.pidfile
+
+# ===== macOS 文件 =====
+.DS_Store

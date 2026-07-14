@@ -1,0 +1,32 @@
+{
+  "name": "qqbot-desktop-launcher",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "npm run build:panel && electron .",
+    "build:panel": "npm --prefix ../frontend run build",
+    "desktop": "npm run build:panel && electron .",
+    "dist:win": "npm run build:panel && electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.qqbot.desktop.launcher",
+    "productName": "QQBot Desktop Launcher",
+    "directories": {
+      "output": "../../release"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable",
+      "artifactName": "QQBot-Desktop-Launcher.exe"
+    }
+  },
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "latest"
+  }
+}

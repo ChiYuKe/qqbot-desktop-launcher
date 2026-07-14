@@ -1,0 +1,185 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from uuid import uuid4
+
+import backend.config as runtime_config
+from backend.config import DEFAULT_NAPCAT_PORT, SCRIPT_DIR
+from backend.database.repository import BotRepository
+from backend.database.stats_repository import MessageStatsRepository
+from backend.domain.errors import ConflictError
+from backend.domain.models import BotConfig
+from backend.event.bus import EventBus
+from backend.manager.bot_manager import BotManager
+from backend.security.secrets import protect_secret, reveal_secret
+from backend.service.resource_setup import ResourceSetupManager
+
+
+class BotService:
+    def __init__(self, repository: BotRepository, manager: BotManager, event_bus: EventBus, stats: MessageStatsRepository) -> None:
+        self.repository = repository
+        self.manager = manager
+        self.event_bus = event_bus
+        self.stats = stats
+        self.resource_setup = ResourceSetupManager()
+
+    async def shutdown(self) -> None:
+        await self.resource_setup.shutdown()
+
+    def list_bots(self) -> list[dict]:
+        return [self._present(bot) for bot in self.repository.list()]
+
+    def _present(self, bot: BotConfig) -> dict:
+        running = self.manager.is_running(bot.id)
+        return {
+            "id": bot.id,
+            "name": bot.name,
+            "qq": bot.qq,
+            "port": bot.port,
+            "napcat_port": bot.napcat_port,
+            "status": "running" if running else "stopped",
+            "protocol": "NapCat / OneBot v11",
+            "groups": bot.groups,
+            "plugins": bot.plugins,
+            "password_configured": bool(bot.password_secret),
+            "uptime_seconds": self.manager.uptime(bot.id),
+            "managed": True,
+        }
+
+    def create(self, name: str, qq: str, port: int, password: str | None = None, napcat_port: int | None = None) -> BotConfig:
+        name = name.strip()
+        qq = qq.strip()
+        if not name or not re.fullmatch(r"\d{5,20}", qq):
+            raise ValueError("Bot 名称不能为空，QQ 号必须是 5-20 位数字")
+        if self.repository.exists_port(port):
+            raise ConflictError(f"端口 {port} 已被占用")
+        if self.repository.exists_qq(qq):
+            raise ConflictError("这个 QQ 号已经存在")
+        selected_napcat_port = napcat_port or self._next_napcat_port()
+        if not 1024 <= selected_napcat_port <= 65535:
+            raise ValueError("NapCat WebUI 端口必须在 1024-65535 之间")
+        if self.repository.exists_napcat_port(selected_napcat_port):
+            raise ConflictError(f"NapCat WebUI 端口 {selected_napcat_port} 已被占用")
+        bot_id = uuid4().hex[:12]
+        script = self._create_script(bot_id, port)
+        bot = BotConfig(id=bot_id, name=name, qq=qq, port=port, napcat_port=selected_napcat_port, script=str(script), password_secret=protect_secret(password))
+        self.repository.create(bot)
+        self.manager.napcat.sync_onebot_port(bot)
+        return bot
+
+    def _next_napcat_port(self) -> int:
+        used = {bot.napcat_port for bot in self.repository.list()}
+        port = DEFAULT_NAPCAT_PORT
+        while port in used and port < 65535:
+            port += 1
+        return port
+
+    def _create_script(self, bot_id: str, port: int) -> Path:
+        SCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+        script = SCRIPT_DIR / f"{bot_id}.ps1"
+        self._write_script(script, port)
+        return script
+
+    @staticmethod
+    def _write_script(script: Path, port: int) -> None:
+        script.write_text(
+            f'$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))\n$nonebot = if ($env:QQ_NONEBOT_DIR) {{ $env:QQ_NONEBOT_DIR }} else {{ Join-Path $root "program\\NoneBot" }}\n$python = Join-Path $root ".venv\\Scripts\\python.exe"\nif (-not (Test-Path $python)) {{ $python = "python" }}\nSet-Location $nonebot\n$env:HOST = "127.0.0.1"\n$env:PORT = "{port}"\n$env:PYTHONIOENCODING = "utf-8"\n$env:PYTHONUTF8 = "1"\n& $python (Join-Path $nonebot "bot.py")\n',
+            encoding="utf-8",
+        )
+
+    async def delete(self, bot_id: str) -> None:
+        bot = self.manager.get(bot_id)
+        if self.manager.is_running(bot_id) or self.manager.napcat.is_running_for_bot(bot):
+            await self.manager.stop(bot_id, "删除")
+        self.repository.delete(bot_id)
+        self.stats.remove_bot(bot_id)
+        script = Path(bot.script)
+        if script.exists() and script.parent == SCRIPT_DIR:
+            script.unlink()
+        await self.event_bus.publish("INFO", "系统", f"删除了 Bot「{bot_id}」")
+
+    async def action(self, bot_id: str, action: str) -> dict:
+        if action == "start":
+            await self.manager.start(bot_id)
+        elif action == "stop":
+            await self.manager.stop(bot_id)
+        elif action == "restart":
+            await self.manager.restart(bot_id)
+        else:
+            raise ValueError("无效的操作")
+        bot = self.manager.get(bot_id)
+        return {"ok": True, "bot_id": bot_id, "action": action, "status": "running" if self.manager.is_running(bot_id) else "stopped"}
+
+    async def update_password(self, bot_id: str, password: str | None) -> None:
+        bot = self.manager.get(bot_id)
+        self.repository.update_password(bot_id, protect_secret(password))
+        await self.event_bus.publish("INFO", bot.name, "已更新密码回退配置")
+
+    def get_password(self, bot_id: str) -> str:
+        bot = self.manager.get(bot_id)
+        try:
+            return reveal_secret(bot.password_secret)
+        except RuntimeError as error:
+            raise ValueError(str(error)) from error
+
+    async def update_port(self, bot_id: str, port: int) -> None:
+        bot = self.manager.get(bot_id)
+        if not 1024 <= port <= 65535:
+            raise ValueError("端口必须在 1024-65535 之间")
+        if self.repository.exists_port(port, exclude_bot_id=bot_id):
+            raise ConflictError(f"端口 {port} 已被其他 Bot 占用")
+        self._write_script(Path(bot.script), port)
+        self.repository.update_port(bot_id, port)
+        updated = self.repository.get(bot_id)
+        if updated:
+            self.manager.napcat.sync_onebot_port(updated)
+        await self.event_bus.publish("INFO", bot.name, f"已更新 OneBot 端口为 {port}，已同步 NapCat 配置，重启 Bot 后生效")
+
+    async def update_napcat_port(self, bot_id: str, port: int) -> None:
+        bot = self.manager.get(bot_id)
+        if not 1024 <= port <= 65535:
+            raise ValueError("NapCat WebUI 端口必须在 1024-65535 之间")
+        if self.repository.exists_napcat_port(port, exclude_bot_id=bot_id):
+            raise ConflictError(f"NapCat WebUI 端口 {port} 已被其他 Bot 占用")
+        self.repository.update_napcat_port(bot_id, port)
+        await self.event_bus.publish("INFO", bot.name, f"已更新 NapCat WebUI 端口为 {port}，重启 Bot 后生效")
+
+    async def command(self, bot_id: str, command: str) -> dict:
+        command = command.strip()
+        quick_login = re.fullmatch(r"-q\s+(\d{5,20})", command, flags=re.IGNORECASE)
+        if not quick_login:
+            quick_index = re.fullmatch(r"-q\s+(\d{1,4})", command, flags=re.IGNORECASE)
+            if not quick_index:
+                raise ValueError("目前支持的控制指令是：-q QQ号，或使用日志中的序号，例如 -q 2")
+            target_index = quick_index.group(1)
+            target_qq = None
+            for event in self.event_bus.history():
+                found = re.search(rf"(?:^|\s){re.escape(target_index)}\.\s*(\d{{5,20}})\s+", str(event.get("message", "")))
+                if found:
+                    target_qq = found.group(1)
+                    break
+            if not target_qq:
+                raise ValueError(f"历史日志中没有找到快速登录序号 {target_index}")
+            quick_login = re.fullmatch(r"(\d{5,20})", target_qq)
+        await self.manager.quick_login(bot_id, quick_login.group(1))
+        return {"ok": True, "bot_id": bot_id, "command": f"-q {quick_login.group(1)}"}
+
+    def napcat_status(self) -> dict:
+        return {
+            "available": self.manager.napcat.available,
+            "path": str(runtime_config.NAPCAT_EXE),
+            "running": sum(self.manager.napcat.is_running(bot.id) for bot in self.repository.list()),
+        }
+
+    def resources(self) -> dict:
+        return runtime_config.resource_status()
+
+    def update_resource(self, kind: str, path: str) -> dict:
+        return runtime_config.set_resource_path(kind, path)
+
+    def start_resource_setup(self) -> dict:
+        return self.resource_setup.start()
+
+    def resource_setup_status(self, job_id: str | None = None) -> dict:
+        return self.resource_setup.status(job_id)
