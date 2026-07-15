@@ -25,6 +25,7 @@ class BotCreatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=40)
     qq: str = Field(min_length=5, max_length=20)
     port: int = Field(ge=1024, le=65535)
+    framework: str = Field(default="nonebot", pattern="^(nonebot|astrbot)$")
     napcat_port: int | None = Field(default=None, ge=1024, le=65535)
     password: str | None = Field(default=None, max_length=256)
 
@@ -39,6 +40,10 @@ class BotPasswordPayload(BaseModel):
 
 class BotPortPayload(BaseModel):
     port: int = Field(ge=1024, le=65535)
+
+
+class BotFrameworkPayload(BaseModel):
+    framework: str = Field(pattern="^(nonebot|astrbot)$")
 
 
 class ResourcePathPayload(BaseModel):
@@ -62,7 +67,7 @@ class StatsRecordPayload(BaseModel):
 router = APIRouter(prefix="/api")
 _MEDIA_HOSTS = {"multimedia.nt.qq.com.cn", "gchat.qpic.cn", "c2cpicdw.qpic.cn"}
 _MAX_MEDIA_BYTES = 20 * 1024 * 1024
-API_PROTOCOL_VERSION = 3
+API_PROTOCOL_VERSION = 4
 
 
 def service(request: Request):
@@ -124,6 +129,14 @@ async def start_runtime_setup(request: Request, payload: ResourceSetupPayload | 
         return service(request).start_resource_setup(payload.kinds if payload else ["nonebot"])
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
+
+
+@router.get("/runtime/setup/installer-log")
+async def runtime_setup_installer_log() -> FileResponse:
+    log_path = runtime_config.PROCESS_LOG_DIR / "napcat-installer.log"
+    if not log_path.is_file():
+        raise HTTPException(404, "还没有 NapCatInstaller.exe 日志")
+    return FileResponse(log_path, media_type="text/plain; charset=gb18030", filename="napcat-installer.log")
 
 
 @router.get("/runtime/setup/{job_id}")
@@ -269,8 +282,8 @@ async def operation_status(operation_id: str, request: Request) -> dict[str, Any
 @router.post("/bots")
 async def create_bot(payload: BotCreatePayload, request: Request) -> dict[str, Any]:
     try:
-        bot = service(request).create(payload.name, payload.qq, payload.port, payload.password, payload.napcat_port)
-        await request.app.state.event_bus.publish("INFO", "系统", f"创建了 Bot「{bot.name}」，OneBot 端口 {bot.port}，NapCat WebUI 端口 {bot.napcat_port}")
+        bot = service(request).create(payload.name, payload.qq, payload.port, payload.password, payload.napcat_port, payload.framework)
+        await request.app.state.event_bus.publish("INFO", "系统", f"创建了 Bot「{bot.name}」，NapCat WebUI 端口 {bot.napcat_port}，OneBot 端口 {bot.port}")
         return {"ok": True, "id": bot.id}
     except DomainError as error:
         raise HTTPException(error.status_code, str(error)) from error
@@ -312,6 +325,17 @@ async def update_bot_password(bot_id: str, payload: BotPasswordPayload, request:
 async def update_bot_port(bot_id: str, payload: BotPortPayload, request: Request) -> dict[str, bool]:
     try:
         await service(request).update_port(bot_id, payload.port)
+        return {"ok": True}
+    except DomainError as error:
+        raise HTTPException(error.status_code, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@router.put("/bots/{bot_id}/framework")
+async def update_bot_framework(bot_id: str, payload: BotFrameworkPayload, request: Request) -> dict[str, bool]:
+    try:
+        await service(request).update_framework(bot_id, payload.framework)
         return {"ok": True}
     except DomainError as error:
         raise HTTPException(error.status_code, str(error)) from error

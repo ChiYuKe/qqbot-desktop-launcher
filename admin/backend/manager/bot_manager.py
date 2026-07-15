@@ -85,8 +85,8 @@ class BotManager:
         self._bot_by_source = {bot.name: bot for bot in self.repository.list()}
 
     async def _emit(self, level: str, source: str, message: str) -> None:
-        # NapCat and NoneBot both write message lines for the same event.
-        # Keep NoneBot as the canonical message source and retain NapCat's
+        # NapCat and the selected bot framework both write message lines for
+        # the same event. Keep framework output canonical and retain NapCat's
         # connection/login diagnostics.
         if self._is_napcat_message(message):
             return
@@ -190,10 +190,11 @@ class BotManager:
             "name": bot.name,
             "qq": bot.qq,
             "port": bot.port,
+            "framework": bot.framework,
+            "framework_label": "AstrBot" if bot.framework == "astrbot" else "NoneBot",
             "napcat_port": bot.napcat_port,
             "status": status,
             "state": status,
-            "protocol": "NapCat / OneBot v11",
             "groups": bot.groups,
             "plugins": bot.plugins,
             "password_configured": bool(bot.password_secret),
@@ -203,7 +204,7 @@ class BotManager:
             "error": runtime.last_error,
             "operation": operation.payload() if operation else None,
             "runtime": {
-                "onebot": {"running": onebot is not None, "pid": onebot.pid if onebot else None},
+                "framework": {"running": onebot is not None, "pid": onebot.pid if onebot else None},
                 "napcat": {"running": napcat is not None, "pid": napcat.pid if napcat else None},
             },
         }
@@ -345,6 +346,7 @@ class BotManager:
         runtime = self._runtime_for(bot.id)
         runtime.login_state = "unknown"
         runtime.qr_login_requested = False
+        self.onebot.prepare(bot)
         self.napcat.sync_onebot_port(bot)
         async with self._napcat_start_lock:
             await self.napcat.start(bot, quick_login=quick_login or bot.qq)
@@ -359,10 +361,14 @@ class BotManager:
     async def _wait_for_ready(self, bot: BotConfig, timeout: float = 20.0) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if find_listening_process(bot.port) is not None and self.onebot.discover(bot) is not None:
+            nonebot_ready = find_listening_process(bot.port) is not None and self.onebot.discover(bot) is not None
+            napcat_ready = self.napcat.discover(bot) is not None
+            if nonebot_ready and napcat_ready:
                 return
             await asyncio.sleep(0.25)
-        raise OperationError(f"Bot「{bot.name}」启动超时：NoneBot 未在端口 {bot.port} 监听")
+        if not nonebot_ready:
+            raise OperationError(f"Bot「{bot.name}」启动超时：NoneBot 未在端口 {bot.port} 监听")
+        raise OperationError(f"Bot「{bot.name}」启动超时：NapCat 进程未保持运行")
 
     async def _stop_now(self, bot: BotConfig) -> None:
         pids = self.onebot.process_ids_for_bot(bot) | self.napcat.process_ids_for_bot(bot)

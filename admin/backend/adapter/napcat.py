@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 
 import psutil
@@ -23,49 +24,154 @@ class NapCatAdapter(OutputProcessAdapter):
         return bool(runtime_config.resource_status()["napcat"]["valid"])
 
     def _config_directory(self) -> Path | None:
-        napcat_dir = runtime_config.NAPCAT_DIR
-        if not napcat_dir.exists():
-            return None
-        candidates = list(napcat_dir.rglob("onebot11_*.json"))
-        if candidates:
-            return candidates[0].parent
-        webui = next(iter(napcat_dir.rglob("webui.json")), None)
-        return webui.parent if webui else None
+        return runtime_config.napcat_config_directory()
 
-    def sync_onebot_port(self, bot: BotConfig) -> bool:
+    @staticmethod
+    def _load_json(path: Path) -> dict[str, object]:
+        if not path.exists():
+            return {}
+        try:
+            raw = path.read_text(encoding="utf-8")
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                # NapCat's documentation uses JSON5 examples, so existing
+                # configs may contain comments and trailing commas.
+                payload = json.loads(NapCatAdapter._strip_json5(raw))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"NapCat 配置文件无法解析：{path.name}") from error
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _strip_json5(raw: str) -> str:
+        """Remove JSON5 comments/trailing commas without touching URL strings."""
+        output: list[str] = []
+        in_string = False
+        escaped = False
+        in_line_comment = False
+        in_block_comment = False
+        index = 0
+        while index < len(raw):
+            char = raw[index]
+            next_char = raw[index + 1] if index + 1 < len(raw) else ""
+            if in_line_comment:
+                if char in "\r\n":
+                    in_line_comment = False
+                    output.append(char)
+                index += 1
+                continue
+            if in_block_comment:
+                if char == "*" and next_char == "/":
+                    in_block_comment = False
+                    output.append(" ")
+                    index += 2
+                else:
+                    output.append("\n" if char == "\n" else " ")
+                    index += 1
+                continue
+            if in_string:
+                output.append(char)
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                index += 1
+                continue
+            if char == '"':
+                in_string = True
+                output.append(char)
+                index += 1
+                continue
+            if char == "/" and next_char == "/":
+                in_line_comment = True
+                index += 2
+                continue
+            if char == "/" and next_char == "*":
+                in_block_comment = True
+                index += 2
+                continue
+            output.append(char)
+            index += 1
+        cleaned = "".join(output)
+        return re.sub(r",\s*([}\]])", r"\1", cleaned)
+
+    @staticmethod
+    def _write_json(path: Path, payload: dict[str, object]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    def configure_webui(self, port: int = runtime_config.DEFAULT_NAPCAT_PORT) -> Path:
+        directory = runtime_config.napcat_config_directory(create=True)
+        if directory is None:
+            raise ValueError("找不到 NapCat 配置目录")
+        path = directory / "webui.json"
+        config = self._load_json(path)
+        config.update({"host": "127.0.0.1", "port": int(port), "loginRate": int(config.get("loginRate") or 3)})
+        self._write_json(path, config)
+        return path
+
+    def configure_onebot(
+        self,
+        qq: str | None,
+        port: int,
+        name: str,
+        token: str = "",
+        framework: str = "nonebot",
+    ) -> Path:
+        """Write NapCat's reverse WebSocket client config from the official schema."""
+        directory = runtime_config.napcat_config_directory(create=True)
+        if directory is None:
+            raise ValueError("找不到 NapCat 配置目录")
+        filename = f"onebot11_{qq}.json" if qq else "onebot11.json"
+        path = directory / filename
+        config = self._load_json(path)
+        network = config.setdefault("network", {})
+        if not isinstance(network, dict):
+            network = {}
+            config["network"] = network
+        for key in ("httpServers", "httpClients", "websocketServers", "websocketClients"):
+            if not isinstance(network.get(key), list):
+                network[key] = []
+        clients = network["websocketClients"]
+        client = next((item for item in clients if isinstance(item, dict) and item.get("name") == name), None)
+        if not isinstance(client, dict):
+            client = {}
+            clients.append(client)
+        client.update(
+            {
+                "name": name,
+                "enable": True,
+                "url": f"ws://127.0.0.1:{int(port)}{'/ws' if framework == 'astrbot' else '/onebot/v11/ws'}",
+                "messagePostFormat": "array",
+                "reportSelfMessage": False,
+                "token": token,
+                "debug": False,
+                "reconnectInterval": 3000,
+                "heartInterval": 30000,
+            }
+        )
+        config.setdefault("musicSignUrl", "")
+        config.setdefault("enableLocalFile2Url", False)
+        config.setdefault("parseMultMsg", False)
+        self._write_json(path, config)
+        return path
+
+    def sync_onebot_port(self, bot: BotConfig, token: str | None = None) -> bool:
         config_directory = self._config_directory()
         if config_directory is None:
             return False
-        config_file = config_directory / f"onebot11_{bot.qq}.json"
         try:
-            config = json.loads(config_file.read_text(encoding="utf-8")) if config_file.exists() else {"network": {}}
-            network = config.setdefault("network", {})
-            clients = network.setdefault("websocketClients", [])
-            if not isinstance(clients, list):
-                clients = []
-                network["websocketClients"] = clients
-            client = next((item for item in clients if isinstance(item, dict) and item.get("name") == bot.name), None)
-            if client is None and clients:
-                client = next((item for item in clients if isinstance(item, dict)), None)
-            if client is None:
-                client = {
-                    "enable": True,
-                    "name": bot.name,
-                    "url": "",
-                    "reportSelfMessage": False,
-                    "messagePostFormat": "array",
-                    "token": "",
-                    "debug": False,
-                    "heartInterval": 3000,
-                    "reconnectInterval": 3000,
-                    "verifyCertificate": True,
-                }
-                clients.append(client)
-            client["name"] = bot.name
-            client["url"] = f"ws://127.0.0.1:{bot.port}/onebot/v11/ws"
-            config_file.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            self.configure_onebot(
+                bot.qq,
+                bot.port,
+                bot.name,
+                token if token is not None else runtime_config.onebot_access_token(),
+                bot.framework,
+            )
             return True
-        except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        except (OSError, UnicodeError, TypeError, ValueError):
             return False
 
     def _is_launcher(self, process: psutil.Process) -> bool:
@@ -114,8 +220,9 @@ class NapCatAdapter(OutputProcessAdapter):
     async def start(self, bot: BotConfig, quick_login: str | None = None, use_password: bool = True) -> None:
         if self.is_running_for_bot(bot):
             return
-        if not self.available:
-            raise AdapterUnavailableError("NapCat 资源不完整：需要同一目录包含 QQ.exe 和 NapCatWinBootMain.exe")
+        status = runtime_config.resource_status()["napcat"]
+        if not status.get("valid"):
+            raise AdapterUnavailableError("NapCat 资源不完整：需要 NapCatWinBootMain.exe 和可用的 QQ.exe")
 
         login_account = quick_login or bot.qq
         environment = os.environ.copy()
@@ -130,11 +237,35 @@ class NapCatAdapter(OutputProcessAdapter):
             environment.pop("NAPCAT_QUICK_PASSWORD", None)
             environment.pop("NAPCAT_QUICK_PASSWORD_MD5", None)
 
+        shell_mode = status.get("mode") == "shell"
+        command = [str(runtime_config.NAPCAT_EXE), login_account]
+        if shell_mode:
+            qq_path = Path(str(status.get("qq_path") or ""))
+            hook_path = runtime_config.NAPCAT_DIR / "NapCatWinBootHook.dll"
+            main_path = runtime_config.NAPCAT_DIR / "napcat.mjs"
+            load_path = runtime_config.NAPCAT_DIR / "loadNapCat.js"
+            if not qq_path.is_file() or not hook_path.is_file() or not main_path.is_file():
+                raise AdapterUnavailableError("NapCat Shell 资源不完整：需要 QQ.exe、NapCatWinBootHook.dll 和 napcat.mjs")
+            load_path.write_text(
+                f'(async () => {{await import("file:///{main_path.as_posix()}")}})()\n',
+                encoding="utf-8",
+            )
+            environment.update(
+                {
+                    "NAPCAT_PATCH_PACKAGE": str(runtime_config.NAPCAT_DIR / "qqnt.json"),
+                    "NAPCAT_LOAD_PATH": str(load_path),
+                    "NAPCAT_INJECT_PATH": str(hook_path),
+                    "NAPCAT_LAUNCHER_PATH": str(runtime_config.NAPCAT_EXE),
+                    "NAPCAT_MAIN_PATH": main_path.as_posix(),
+                }
+            )
+            command = [str(runtime_config.NAPCAT_EXE), str(qq_path), str(hook_path), "-q", login_account]
+
         log_path = self.prepare_log_path(bot)
         start_position = log_path.stat().st_size
         with log_path.open("a", encoding="utf-8", buffering=1) as output:
             process = subprocess.Popen(
-                [str(runtime_config.NAPCAT_EXE), login_account],
+                command,
                 cwd=runtime_config.NAPCAT_DIR,
                 text=True,
                 encoding="utf-8",

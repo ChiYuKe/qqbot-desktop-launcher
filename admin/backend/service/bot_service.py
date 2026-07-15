@@ -33,11 +33,22 @@ class BotService:
     def _present(self, bot: BotConfig) -> dict:
         return self.manager.snapshot(bot)
 
-    def create(self, name: str, qq: str, port: int, password: str | None = None, napcat_port: int | None = None) -> BotConfig:
+    def create(
+        self,
+        name: str,
+        qq: str,
+        port: int,
+        password: str | None = None,
+        napcat_port: int | None = None,
+        framework: str = "nonebot",
+    ) -> BotConfig:
         name = name.strip()
         qq = qq.strip()
+        framework = framework.strip().lower()
         if not name or not re.fullmatch(r"\d{5,20}", qq):
             raise ValueError("Bot 名称不能为空，QQ 号必须是 5-20 位数字")
+        if framework not in {"nonebot", "astrbot"}:
+            raise ValueError("机器人框架必须是 NoneBot 或 AstrBot")
         if self.repository.exists_port(port):
             raise ConflictError(f"端口 {port} 已被占用")
         if self.repository.exists_qq(qq):
@@ -48,11 +59,11 @@ class BotService:
         if self.repository.exists_napcat_port(selected_napcat_port):
             raise ConflictError(f"NapCat WebUI 端口 {selected_napcat_port} 已被占用")
         bot_id = uuid4().hex[:12]
-        script = self._create_script(bot_id, port)
-        bot = BotConfig(id=bot_id, name=name, qq=qq, port=port, napcat_port=selected_napcat_port, script=str(script), password_secret=protect_secret(password))
+        script = self._create_script(bot_id, port, framework)
+        bot = BotConfig(id=bot_id, name=name, qq=qq, port=port, framework=framework, napcat_port=selected_napcat_port, script=str(script), password_secret=protect_secret(password))
         self.repository.create(bot)
         self.manager.refresh_bot_index()
-        self.manager.napcat.sync_onebot_port(bot)
+        self.manager.napcat.sync_onebot_port(bot, runtime_config.ensure_onebot_access_token())
         return bot
 
     def _next_napcat_port(self) -> int:
@@ -62,18 +73,47 @@ class BotService:
             port += 1
         return port
 
-    def _create_script(self, bot_id: str, port: int) -> Path:
+    def _create_script(self, bot_id: str, port: int, framework: str) -> Path:
         SCRIPT_DIR.mkdir(parents=True, exist_ok=True)
         script = SCRIPT_DIR / f"{bot_id}.ps1"
-        self._write_script(script, port)
+        self._write_script(script, bot_id, port, framework)
         return script
 
     @staticmethod
-    def _write_script(script: Path, port: int) -> None:
-        script.write_text(
-            f'$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))\n$nonebot = if ($env:QQ_NONEBOT_DIR) {{ $env:QQ_NONEBOT_DIR }} else {{ Join-Path $root "program\\NoneBot" }}\n$python = Join-Path $root ".venv\\Scripts\\python.exe"\nif (-not (Test-Path $python)) {{ $python = "python" }}\nSet-Location $nonebot\n$env:HOST = "127.0.0.1"\n$env:PORT = "{port}"\n$env:PYTHONIOENCODING = "utf-8"\n$env:PYTHONUTF8 = "1"\n& $python (Join-Path $nonebot "bot.py")\n',
-            encoding="utf-8",
-        )
+    def _write_script(script: Path, bot_id: str, port: int, framework: str) -> None:
+        root = '$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))\n'
+        if framework == "astrbot":
+            content = (
+                root
+                + '$astrbot = if ($env:QQ_ASTRBOT_DIR) { $env:QQ_ASTRBOT_DIR } else { Join-Path $root "program\\AstrBot" }\n'
+                + f'$instance = if ($env:QQ_ASTRBOT_INSTANCE_DIR) {{ $env:QQ_ASTRBOT_INSTANCE_DIR }} else {{ Join-Path $astrbot "instances\\{bot_id}" }}\n'
+                + '$python = Join-Path $astrbot ".venv\\Scripts\\python.exe"\n'
+                + 'if (-not (Test-Path $python)) { $python = Join-Path $root ".venv\\Scripts\\python.exe" }\n'
+                + 'if (-not (Test-Path $python)) { $python = "python" }\n'
+                + 'Set-Location $astrbot\n'
+                + '$env:ASTRBOT_ROOT = $instance\n'
+                + f'$env:ASTRBOT_BOT_ID = "{bot_id}"\n'
+                + f'$env:ASTRBOT_ONEBOT_PORT = "{port}"\n'
+                + '$env:PYTHONIOENCODING = "utf-8"\n'
+                + '$env:PYTHONUTF8 = "1"\n'
+                + '$env:PYTHONUNBUFFERED = "1"\n'
+                + '& $python (Join-Path $astrbot "main.py")\n'
+            )
+        else:
+            content = (
+                root
+                + '$nonebot = if ($env:QQ_NONEBOT_DIR) { $env:QQ_NONEBOT_DIR } else { Join-Path $root "program\\NoneBot" }\n'
+                + '$python = Join-Path $root ".venv\\Scripts\\python.exe"\n'
+                + 'if (-not (Test-Path $python)) { $python = "python" }\n'
+                + 'Set-Location $nonebot\n'
+                + '$env:HOST = "127.0.0.1"\n'
+                + f'$env:PORT = "{port}"\n'
+                + '$env:PYTHONIOENCODING = "utf-8"\n'
+                + '$env:PYTHONUTF8 = "1"\n'
+                + '$env:PYTHONUNBUFFERED = "1"\n'
+                + '& $python (Join-Path $nonebot "bot.py")\n'
+            )
+        script.write_text(content, encoding="utf-8")
 
     async def delete(self, bot_id: str) -> None:
         bot = self.manager.get(bot_id)
@@ -100,12 +140,26 @@ class BotService:
             raise ValueError("端口必须在 1024-65535 之间")
         if self.repository.exists_port(port, exclude_bot_id=bot_id):
             raise ConflictError(f"端口 {port} 已被其他 Bot 占用")
-        self._write_script(Path(bot.script), port)
+        self._write_script(Path(bot.script), bot.id, port, bot.framework)
         self.repository.update_port(bot_id, port)
         updated = self.repository.get(bot_id)
         if updated:
-            self.manager.napcat.sync_onebot_port(updated)
+            self.manager.napcat.sync_onebot_port(updated, runtime_config.ensure_onebot_access_token())
         await self.event_bus.publish("INFO", bot.name, f"已更新 OneBot 端口为 {port}，已同步 NapCat 配置，重启 Bot 后生效")
+
+    async def update_framework(self, bot_id: str, framework: str) -> None:
+        bot = self.manager.get(bot_id)
+        framework = framework.strip().lower()
+        if framework not in {"nonebot", "astrbot"}:
+            raise ValueError("机器人框架必须是 NoneBot 或 AstrBot")
+        if self.manager.is_running(bot_id):
+            raise ValueError("请先停止 Bot，再切换机器人框架")
+        self._write_script(Path(bot.script), bot.id, bot.port, framework)
+        self.repository.update_framework(bot_id, framework)
+        updated = self.repository.get(bot_id)
+        if updated:
+            self.manager.napcat.sync_onebot_port(updated, runtime_config.ensure_onebot_access_token())
+        await self.event_bus.publish("INFO", bot.name, f"已切换机器人框架为 {framework.title()}，重启 Bot 后生效")
 
     async def update_napcat_port(self, bot_id: str, port: int) -> None:
         bot = self.manager.get(bot_id)
@@ -150,7 +204,7 @@ class BotService:
         return runtime_config.set_resource_path(kind, path)
 
     def start_resource_setup(self, kinds: list[str] | None = None) -> dict:
-        return self.resource_setup.start(kinds)
+        return self.resource_setup.start(kinds, self.repository.list())
 
     def resource_setup_status(self, job_id: str | None = None) -> dict:
         return self.resource_setup.status(job_id)

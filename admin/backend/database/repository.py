@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS bots (
     name TEXT NOT NULL,
     qq TEXT NOT NULL UNIQUE,
     port INTEGER NOT NULL UNIQUE,
+    framework TEXT NOT NULL DEFAULT 'nonebot',
     napcat_port INTEGER NOT NULL DEFAULT 6099,
     script TEXT NOT NULL,
     password_secret TEXT NOT NULL DEFAULT '',
@@ -60,6 +61,8 @@ class BotRepository:
                 connection.execute("ALTER TABLE bots ADD COLUMN password_secret TEXT NOT NULL DEFAULT ''")
             if "napcat_port" not in columns:
                 connection.execute("ALTER TABLE bots ADD COLUMN napcat_port INTEGER NOT NULL DEFAULT 6099")
+            if "framework" not in columns:
+                connection.execute("ALTER TABLE bots ADD COLUMN framework TEXT NOT NULL DEFAULT 'nonebot'")
             rows = connection.execute("SELECT id, napcat_port FROM bots ORDER BY created_at, id").fetchall()
             used: set[int] = set()
             next_port = 6099
@@ -89,8 +92,8 @@ class BotRepository:
                     continue
                 try:
                     connection.execute(
-                        "INSERT OR IGNORE INTO bots (id, name, qq, port, napcat_port, script, password_secret, groups, plugins) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (bot_id, config["name"], str(config["qq"]), int(config["port"]), int(config.get("napcat_port", 6099)), config.get("script", ""), config.get("password_secret", ""), int(config.get("groups", 0)), int(config.get("plugins", 0))),
+                        "INSERT OR IGNORE INTO bots (id, name, qq, port, framework, napcat_port, script, password_secret, groups, plugins) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (bot_id, config["name"], str(config["qq"]), int(config["port"]), str(config.get("framework", "nonebot")), int(config.get("napcat_port", 6099)), config.get("script", ""), config.get("password_secret", ""), int(config.get("groups", 0)), int(config.get("plugins", 0))),
                     )
                 except (KeyError, TypeError, ValueError, sqlite3.IntegrityError):
                     continue
@@ -124,8 +127,8 @@ class BotRepository:
     def create(self, bot: BotConfig) -> BotConfig:
         with self._connection() as connection:
             connection.execute(
-                "INSERT INTO bots (id, name, qq, port, napcat_port, script, password_secret, groups, plugins) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (bot.id, bot.name, bot.qq, bot.port, bot.napcat_port, bot.script, bot.password_secret, bot.groups, bot.plugins),
+                "INSERT INTO bots (id, name, qq, port, framework, napcat_port, script, password_secret, groups, plugins) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (bot.id, bot.name, bot.qq, bot.port, bot.framework, bot.napcat_port, bot.script, bot.password_secret, bot.groups, bot.plugins),
             )
         return bot
 
@@ -136,6 +139,10 @@ class BotRepository:
     def update_port(self, bot_id: str, port: int) -> None:
         with self._connection() as connection:
             connection.execute("UPDATE bots SET port = ? WHERE id = ?", (port, bot_id))
+
+    def update_framework(self, bot_id: str, framework: str) -> None:
+        with self._connection() as connection:
+            connection.execute("UPDATE bots SET framework = ? WHERE id = ?", (framework, bot_id))
 
     def update_napcat_port(self, bot_id: str, port: int) -> None:
         with self._connection() as connection:

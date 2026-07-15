@@ -283,7 +283,10 @@ class OutputProcessAdapter:
         return {process.pid} if process is not None else set()
 
     def forget(self, bot_id: str) -> None:
-        self._processes.pop(bot_id, None)
+        process = self._processes.pop(bot_id, None)
+        close = getattr(process, "close", None)
+        if close is not None:
+            close()
         self._external.pop(bot_id, None)
         self._started_at.pop(bot_id, None)
         task = self._drain_tasks.pop(bot_id, None)
@@ -304,6 +307,10 @@ class OutputProcessAdapter:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        for process in self._processes.values():
+            close = getattr(process, "close", None)
+            if close is not None:
+                close()
         self._processes.clear()
         self._external.clear()
         self._started_at.clear()

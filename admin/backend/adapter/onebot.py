@@ -23,6 +23,15 @@ class OneBotAdapter(OutputProcessAdapter):
     def __init__(self, sink: EventSink) -> None:
         super().__init__(sink, runtime_config.PROCESS_LOG_DIR, "nonebot")
 
+    def prepare(self, bot: BotConfig) -> None:
+        if bot.framework == "astrbot":
+            status = runtime_config.resource_status()["astrbot"]
+            if not status.get("valid"):
+                raise AdapterUnavailableError("AstrBot 资源不完整：需要 main.py、pyproject.toml 和依赖环境")
+            runtime_config.ensure_astrbot_config(bot.id, bot.port, bot.napcat_port)
+            return
+        runtime_config.ensure_nonebot_environment(bot.port)
+
     async def start(self, bot: BotConfig) -> None:
         if self.is_running_for_bot(bot):
             return
@@ -32,6 +41,8 @@ class OneBotAdapter(OutputProcessAdapter):
 
         environment = os.environ.copy()
         environment["QQ_NONEBOT_DIR"] = str(runtime_config.NONEBOT_DIR)
+        environment["QQ_ASTRBOT_DIR"] = str(runtime_config.ASTRBOT_DIR)
+        environment["QQ_ASTRBOT_INSTANCE_DIR"] = str(runtime_config.astrbot_instance_dir(bot.id))
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
         environment["PYTHONUNBUFFERED"] = "1"
@@ -42,12 +53,13 @@ class OneBotAdapter(OutputProcessAdapter):
             python_path.append(environment["PYTHONPATH"])
         environment["PYTHONPATH"] = os.pathsep.join(python_path)
 
+        working_directory = runtime_config.ASTRBOT_DIR if bot.framework == "astrbot" else runtime_config.NONEBOT_DIR
         log_path = self.prepare_log_path(bot)
         start_position = log_path.stat().st_size
         with log_path.open("a", encoding="utf-8", buffering=1) as output:
             process = subprocess.Popen(
                 ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)],
-                cwd=runtime_config.NONEBOT_DIR,
+                cwd=working_directory,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -64,7 +76,11 @@ class OneBotAdapter(OutputProcessAdapter):
         listener = find_listening_process(bot.port)
         if listener is not None:
             command = process_command(listener)
-            if "bot.py" in command or "nonebot" in command:
+            if bot.framework == "astrbot":
+                matches_framework = "main.py" in command or "astrbot" in command
+            else:
+                matches_framework = "bot.py" in command or "nonebot" in command
+            if matches_framework:
                 self.attach_external(bot, listener)
                 return listener
         matches = find_processes_by_command(str(Path(bot.script).resolve()))
