@@ -522,12 +522,12 @@ button:disabled { opacity: .45; cursor: wait; }
 .qr-card { width: min(190px, 100%); display: grid; justify-items: center; gap: 6px; margin: 8px 0 2px; padding: 10px; background: #fff; border: 1px solid #e3e7ee; border-radius: 8px; }.qr-card img { width: 160px; height: 160px; display: block; image-rendering: pixelated; }.qr-card span { color: #7d8794; font-size: 10px; }
 .log-copy > .qr-card { display: grid; grid-template-columns: minmax(0, 1fr); align-items: center; justify-items: center; }.log-copy > .qr-card span { display: block; width: 100%; text-align: center; white-space: nowrap; }
 .log-copy > span { overflow: visible; color: #52606f; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; word-break: break-word; line-height: 1.6; }
-.log-image-message { display: inline-flex; max-width: 100%; flex-direction: column; vertical-align: middle; }
+.log-image-message { display: flex; align-items: flex-start; width: 100%; max-width: 100%; flex-direction: column; }
 .image-message-button { display: inline-flex; align-items: center; gap: 6px; width: fit-content; max-width: 100%; min-height: 27px; padding: 3px 9px; color: #5e55c4; background: #f0efff; border: 0; border-radius: 7px; font-size: 11px; text-align: left; }
 .image-message-button:hover { color: #493fb4; background: #e8e5ff; }
 .image-message-button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-message-button small { color: #8a83ce; font-size: 10px; white-space: nowrap; }
-.image-message-panel { display: grid; gap: 6px; width: min(360px, 100%); margin: 7px 0 2px; padding: 9px; background: #fff; border: 1px solid #e3e7ee; border-radius: 8px; }
+.image-message-panel { display: grid; gap: 6px; width: min(360px, 100%); margin: 7px 0 2px; padding: 9px; background: #fff; border: 0; border-radius: 8px; }
 .image-message-preview { display: grid; min-height: 48px; place-items: center; overflow: hidden; background: #f7f8fb; border-radius: 6px; }
 .image-message-preview img { display: block; max-width: 100%; max-height: 260px; object-fit: contain; }
 .image-message-error { padding: 16px 10px; color: #a46100; font-size: 11px; text-align: center; }
@@ -675,7 +675,7 @@ body { font-weight: 500; }
 :root[data-theme="dark"] .image-message-button { color: #c4bdff; background: #292544; }
 :root[data-theme="dark"] .image-message-button:hover { color: #d8d3ff; background: #332d56; }
 :root[data-theme="dark"] .image-message-button small { color: #a79de6; }
-:root[data-theme="dark"] .image-message-panel { background: #202328; border-color: #3a3e46; }
+:root[data-theme="dark"] .image-message-panel { background: #202328; border: 0; }
 :root[data-theme="dark"] .image-message-preview { background: #181a1e; }
 :root[data-theme="dark"] .image-message-meta, :root[data-theme="dark"] .image-message-url { color: #9aa1ac; }
 :root[data-theme="dark"] .image-message-action { color: #b5adff; }
@@ -795,6 +795,7 @@ body { font-weight: 500; }
 
 .login-verification-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 10px; padding: 11px 13px; color: #72521a; background: #fffaf0; border: 1px solid #eadfca; border-radius: 9px; }
 .login-verification-card.is-expanded { align-items: stretch; flex-direction: column; }
+.login-verification-card:has(.login-verification-embed) { align-items: stretch; flex-direction: column; }
 .login-verification-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .login-verification-card strong { color: #6d4b12; font-size: 12px; }
 .login-verification-card span { color: #8a6a2d; font-size: 11px; line-height: 1.45; }
@@ -806,7 +807,7 @@ body { font-weight: 500; }
 .login-verification-embed iframe { display: block; width: 100%; height: 440px; border: 0; background: #fff; }
 .login-verification-embed-tools { display: flex; align-items: center; justify-content: flex-end; gap: 7px; padding: 7px 9px; border-top: 1px solid #eee5d7; background: #fffaf0; }
 .login-verification-embed-tools > span { margin-right: auto; color: #8a6a2d; font-size: 10px; }
-.login-verification-embed-tools .soft-button { display: inline-flex; align-items: center; gap: 4px; height: 27px; padding: 0 8px; color: #73561d; background: transparent; border-color: transparent; font-size: 10px; }
+.login-verification-embed-tools .soft-button { width: auto; min-width: 0; display: inline-flex; align-items: center; flex: none; gap: 4px; height: 27px; padding: 0 8px; color: #73561d; background: transparent; border-color: transparent; font-size: 10px; white-space: nowrap; }
 .login-verification-embed-tools .soft-button:hover { background: #fff1c9; }
 
 :root[data-theme="dark"] .login-verification-card { color: #dcdcaa; background: #252526; border-color: #3e3e42; }
@@ -1657,5 +1658,18 @@ body { overflow: hidden; }
 :root[data-theme="dark"] .detail-actions .action-button.danger:hover,
 :root[data-theme="dark"] .runtime-page .runtime-bot-row-actions .runtime-action.danger:hover {
   background: #dc2f2f;
+}
+
+/* Light surfaces need enough separation from the white content canvas without adding borders. */
+:root:not([data-theme="dark"]) .config-card,
+:root:not([data-theme="dark"]) .resource-status-card,
+:root:not([data-theme="dark"]) .resource-card,
+:root:not([data-theme="dark"]) .resource-help,
+:root:not([data-theme="dark"]) .activity-feed {
+  background: #eef2f6;
+}
+:root:not([data-theme="dark"]) .resource-path,
+:root:not([data-theme="dark"]) .resource-setup-item {
+  background: #e4e9ef;
 }
 }

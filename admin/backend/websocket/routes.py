@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from backend.security.session import token_matches
+from backend.security.session import consume_websocket_ticket, token_matches
 
 
 router = APIRouter()
@@ -12,7 +12,8 @@ router = APIRouter()
 async def events_socket(websocket: WebSocket) -> None:
     protocols = list(websocket.scope.get("subprotocols", []))
     session_protocol = next((protocol for protocol in protocols if token_matches(protocol)), None)
-    if session_protocol is None:
+    ticket_authorized = consume_websocket_ticket(websocket.query_params.get("ticket"))
+    if session_protocol is None and not ticket_authorized:
         await websocket.close(code=1008, reason="管理会话令牌无效或缺失")
         return
     await websocket.accept(subprotocol=session_protocol)

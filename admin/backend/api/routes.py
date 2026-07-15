@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from backend.domain.errors import DomainError
+from backend.security.session import create_websocket_ticket
 import backend.config as runtime_config
 
 
@@ -78,26 +79,34 @@ async def health() -> dict[str, Any]:
     }
 
 
+@router.post("/ws/ticket")
+async def websocket_ticket() -> dict[str, str]:
+    return {"ticket": create_websocket_ticket()}
+
+
 @router.get("/napcat")
 async def napcat_status(request: Request) -> dict[str, Any]:
-    return service(request).napcat_status()
+    return await asyncio.to_thread(service(request).napcat_status)
 
 
 @router.get("/runtime/resources")
 async def runtime_resources(request: Request) -> dict[str, Any]:
-    return service(request).resources()
+    return await asyncio.to_thread(service(request).resources)
 
 
 @router.get("/stats")
 async def message_stats(request: Request) -> dict[str, Any]:
-    return request.app.state.stats.summary(request.app.state.repository.list())
+    repository = request.app.state.repository
+    stats = request.app.state.stats
+    bots = await asyncio.to_thread(repository.list)
+    return await asyncio.to_thread(stats.summary, bots)
 
 
 @router.post("/stats/record")
 async def record_message_stat(payload: StatsRecordPayload, request: Request) -> dict[str, bool]:
     if request.app.state.repository.get(payload.bot_id) is None:
         raise HTTPException(404, "Bot 不存在")
-    request.app.state.stats.record(payload.bot_id, payload.direction, payload.message_type)
+    await asyncio.to_thread(request.app.state.stats.record, payload.bot_id, payload.direction, payload.message_type)
     return {"ok": True}
 
 
@@ -133,7 +142,7 @@ async def request_shutdown(request: Request) -> dict[str, bool]:
 
 @router.get("/plugins")
 async def list_plugins(request: Request) -> dict[str, Any]:
-    return request.app.state.plugin_registry.snapshot()
+    return await asyncio.to_thread(request.app.state.plugin_registry.snapshot)
 
 
 @router.put("/plugins/{plugin_id}")
@@ -246,7 +255,7 @@ async def media_cache(file: str, download: bool = False) -> Response:
 
 @router.get("/bots")
 async def list_bots(request: Request) -> list[dict[str, Any]]:
-    return service(request).list_bots()
+    return await asyncio.to_thread(service(request).list_bots)
 
 
 @router.get("/operations/{operation_id}")
@@ -333,7 +342,7 @@ async def bot_action(bot_id: str, action: str, request: Request) -> dict[str, An
 
 @router.get("/system")
 async def system_info(request: Request) -> dict[str, Any]:
-    snapshots = request.app.state.bot_manager.list()
+    snapshots = await asyncio.to_thread(request.app.state.bot_manager.list)
     return {
         "cpu": psutil.cpu_percent(interval=None),
         "memory": psutil.virtual_memory().percent,

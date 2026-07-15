@@ -63,13 +63,27 @@ function botStatusState(bot) {
   return 'muted'
 }
 
+function normalizeLocalUrl(value) {
+  if (!value) return value
+  try {
+    const url = new URL(value)
+    if (url.protocol === 'http:' && ['[::]', '[::1]', '0.0.0.0'].includes(url.hostname)) {
+      url.hostname = '127.0.0.1'
+    }
+    return url.toString()
+  } catch {
+    return value
+  }
+}
+
 function openExternal(url) {
-  if (!url) return
+  const normalizedUrl = normalizeLocalUrl(url)
+  if (!normalizedUrl) return
   if (window.externalLinks?.open) {
-    window.externalLinks.open(url)
+    window.externalLinks.open(normalizedUrl)
     return
   }
-  window.open(url, '_blank', 'noopener,noreferrer')
+  window.open(normalizedUrl, '_blank', 'noopener,noreferrer')
 }
 
 function orderLogs(logs) {
@@ -266,6 +280,7 @@ function App() {
   const [logsPaused, setLogsPaused] = useState(false)
   const [newAccount, setNewAccount] = useState({ name: '', qq: '', port: '', napcatPort: '', password: '' })
   const [online, setOnline] = useState(false)
+  const dashboardLoadingRef = useRef(false)
   const [theme, setTheme] = useState(() => window.localStorage.getItem('qq-console-theme') || 'system')
   const [favoriteKeys, setFavoriteKeys] = useState(() => {
     try {
@@ -303,6 +318,8 @@ function App() {
   }, [])
 
   const loadDashboard = useCallback(async (showToast = false) => {
+    if (dashboardLoadingRef.current) return
+    dashboardLoadingRef.current = true
     try {
       const [botData, systemData, logData, napcatData, resourceData, pluginData] = await Promise.all([
         api('/api/bots'), api('/api/system'), api('/api/logs'), api('/api/napcat'), api('/api/runtime/resources'),
@@ -329,6 +346,8 @@ function App() {
     } catch (error) {
       setOnline(false)
       if (showToast) notify(`管理 API 不可用：${error.message}`)
+    } finally {
+      dashboardLoadingRef.current = false
     }
   }, [logsPaused, notify])
 
@@ -352,29 +371,46 @@ function App() {
     const host = window.location.hostname || '127.0.0.1'
     let socket
     let retryTimer
+    let connecting = false
     let disposed = false
 
-    const connect = () => {
-      if (disposed) return
-      const token = apiToken()
-      socket = new WebSocket(`ws://${host}:6700/ws/events`, token ? [token] : [])
-      socket.onmessage = (message) => {
-        try {
-          const payload = JSON.parse(message.data)
-          if (logsPaused) return
-          if (payload.type === 'snapshot') setLogs((current) => mergeCurrentSessionLogs(current, orderCurrentSessionLogs(payload.logs || [])))
-          if (payload.type === 'event' && payload.data && isCurrentSessionLog(payload.data)) setLogs((current) => mergeCurrentSessionLogs(current, [payload.data]))
-        } catch {
-          // Ignore malformed events; the polling fallback remains active.
-        }
-      }
-      socket.onclose = () => {
-        if (!disposed) retryTimer = window.setTimeout(connect, 1500)
-      }
-      socket.onerror = () => socket.close()
+    const scheduleReconnect = () => {
+      if (disposed || retryTimer) return
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null
+        void connect()
+      }, 3000)
     }
 
-    connect()
+    const connect = async () => {
+      if (disposed || connecting) return
+      connecting = true
+      try {
+        const { ticket } = await api('/api/ws/ticket', { method: 'POST' })
+        if (disposed || !ticket) return
+        socket = new WebSocket(`ws://${host}:6700/ws/events?ticket=${encodeURIComponent(ticket)}`)
+        socket.onmessage = (message) => {
+          try {
+            const payload = JSON.parse(message.data)
+            if (logsPaused) return
+            if (payload.type === 'snapshot') setLogs((current) => mergeCurrentSessionLogs(current, orderCurrentSessionLogs(payload.logs || [])))
+            if (payload.type === 'event' && payload.data && isCurrentSessionLog(payload.data)) setLogs((current) => mergeCurrentSessionLogs(current, [payload.data]))
+          } catch {
+            // Ignore malformed events; the polling fallback remains active.
+          }
+        }
+        socket.onclose = () => {
+          scheduleReconnect()
+        }
+        socket.onerror = () => socket.close()
+      } catch {
+        scheduleReconnect()
+      } finally {
+        connecting = false
+      }
+    }
+
+    void connect()
     return () => {
       disposed = true
       window.clearTimeout(retryTimer)
@@ -733,21 +769,39 @@ function AccountWorkspace({ bots, selectedBot, selectedBotId, setSelectedBotId, 
   const [command, setCommand] = useState('')
   const [detailView, setDetailView] = useState('overview')
   const [visibleQrKey, setVisibleQrKey] = useState('')
+  const autoOpenedQrKey = useRef('')
   const feedRef = useRef(null)
   const followLogsRef = useRef(true)
   const running = isBotRunning(selectedBot)
   const transitioning = isBotTransitioning(selectedBot)
   const botLogs = useMemo(() => selectedBot ? logs.filter((log) => log.source === selectedBot.name) : [], [logs, selectedBot?.name])
   const visibleLogs = useMemo(() => prepareLogItems(botLogs), [botLogs])
-  const verification = useMemo(() => findLoginVerification(botLogs), [botLogs])
+  const verification = useMemo(() => {
+    if (selectedBot?.status === 'running' || selectedBot?.login_state === 'connected') return null
+    return findLoginVerification(botLogs)
+  }, [botLogs, selectedBot?.login_state, selectedBot?.status])
 
   useEffect(() => {
     setDetailView('overview')
     setVisibleQrKey('')
+    autoOpenedQrKey.current = ''
   }, [selectedBot?.id])
 
   useEffect(() => {
     if (feedRef.current && visibleLogs.length && followLogsRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight
+  }, [visibleLogs])
+
+  useEffect(() => {
+    let latestQrIndex = -1
+    visibleLogs.forEach((log, index) => {
+      if (log.kind === 'qr') latestQrIndex = index
+    })
+    if (latestQrIndex < 0) return
+    const latestQr = visibleLogs[latestQrIndex]
+    const qrKey = latestQr.time + '-' + latestQr.source + '-' + latestQrIndex
+    if (autoOpenedQrKey.current === qrKey) return
+    autoOpenedQrKey.current = qrKey
+    setVisibleQrKey(qrKey)
   }, [visibleLogs])
 
   const submitCommand = async () => {
@@ -1002,12 +1056,16 @@ function findLoginVerification(logs, source) {
   const proofUrl = text.match(/(?:proofWaterUrl|验证[:：])\s*(https?:\/\/[^\s]+)/i)?.[1]?.replace(/[),.;]+$/, '') || ''
   const webuiLog = candidates.find((log) => /WebUI User Panel Url:\s*https?:\/\//i.test(cleanLogMessage(log.message)))
   const webuiUrl = cleanLogMessage(webuiLog?.message || '').match(/https?:\/\/[^\s]+\/webui\?token=[^\s]+/i)?.[0]?.replace(/[),.;]+$/, '') || ''
-  return { proofUrl, webuiUrl, challengeTime: challenge.time }
+  return { proofUrl, webuiUrl: normalizeLocalUrl(webuiUrl), challengeTime: challenge.time }
 }
 
 function LoginVerificationCard({ verification, onRetry, onNotice }) {
-  const [webuiOpen, setWebuiOpen] = useState(false)
+  const [embedTarget, setEmbedTarget] = useState('')
   const [frameKey, setFrameKey] = useState(0)
+  const webuiOpen = embedTarget === 'webui'
+  const proofOpen = embedTarget === 'proof'
+  const embeddedUrl = webuiOpen ? verification.webuiUrl : proofOpen ? verification.proofUrl : ''
+  const embeddedTitle = webuiOpen ? 'NapCat WebUI 安全验证' : 'QQ 安全验证'
 
   const open = (url, label) => {
     if (!url) {
@@ -1017,15 +1075,15 @@ function LoginVerificationCard({ verification, onRetry, onNotice }) {
     openExternal(url)
   }
   return <div className={`login-verification-card ${webuiOpen ? 'is-expanded' : ''}`}>
-    <div className="login-verification-copy"><strong>需要 QQ 安全验证</strong><span>可直接在这里打开 NapCat WebUI 完成验证；验证完成后点击“重新登录”，面板会继续显示二维码或登录结果。</span></div>
+    <div className="login-verification-copy"><strong>需要 QQ 安全验证</strong><span>密码回退失败后会自动切换到二维码登录，也可以在这里完成 QQ 安全验证；完成后点击“重新登录”即可。</span></div>
     <div className="login-verification-actions">
-      <button type="button" className="soft-button" onClick={() => setWebuiOpen((openState) => !openState)} disabled={!verification.webuiUrl}>{webuiOpen ? '收起 WebUI' : '在面板中打开 WebUI'}</button>
-      <button type="button" className="soft-button" onClick={() => open(verification.proofUrl, '安全验证')} disabled={!verification.proofUrl}>打开安全验证</button>
+      <button type="button" className="soft-button" onClick={() => setEmbedTarget((target) => target === 'webui' ? '' : 'webui')} disabled={!verification.webuiUrl}>{webuiOpen ? '收起 WebUI' : '在面板中打开 WebUI'}</button>
+      <button type="button" className="soft-button" onClick={() => setEmbedTarget((target) => target === 'proof' ? '' : 'proof')} disabled={!verification.proofUrl}>{proofOpen ? '收起安全验证' : '打开安全验证'}</button>
       <button type="button" className="action-button" onClick={onRetry}>重新登录</button>
     </div>
-    {webuiOpen && verification.webuiUrl && <div className="login-verification-embed">
-      <iframe key={frameKey} title="NapCat WebUI 安全验证" src={verification.webuiUrl} />
-      <div className="login-verification-embed-tools"><span>如果窗口空白，请使用外部窗口打开。</span><button type="button" className="soft-button" onClick={() => setFrameKey((key) => key + 1)}><RefreshCw size={13} />刷新</button><button type="button" className="soft-button" onClick={() => open(verification.webuiUrl, 'NapCat WebUI')}><ExternalLink size={13} />外部打开</button></div>
+    {embeddedUrl && <div className="login-verification-embed">
+      <iframe key={embedTarget + '-' + frameKey} title={embeddedTitle} src={embeddedUrl} />
+      <div className="login-verification-embed-tools"><span>如果窗口空白，请使用外部窗口打开。</span><button type="button" className="soft-button" onClick={() => setFrameKey((key) => key + 1)}><RefreshCw size={13} />刷新</button><button type="button" className="soft-button" onClick={() => open(embeddedUrl, embeddedTitle)}><ExternalLink size={13} />外部打开</button></div>
     </div>}
   </div>
 }

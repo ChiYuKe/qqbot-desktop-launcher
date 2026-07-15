@@ -30,6 +30,8 @@ class BotRuntime:
     last_error: str | None = None
     login_state: str = "unknown"
     last_log_at: float | None = None
+    qr_login_requested: bool = False
+    stop_requested: bool = False
 
 
 @dataclass
@@ -95,6 +97,9 @@ class BotManager:
         runtime = self._runtime_for(bot.id)
         runtime.last_log_at = time.time()
         self._observe_log(runtime, message)
+        if "密码回退需要验证码" in _ANSI_RE.sub("", message) and not runtime.qr_login_requested:
+            runtime.qr_login_requested = True
+            asyncio.create_task(self._queue_qr_login(bot.id))
         timestamp = event.get("timestamp")
         occurred_at = None
         if timestamp:
@@ -121,12 +126,14 @@ class BotManager:
     @staticmethod
     def _observe_log(runtime: BotRuntime, message: str) -> None:
         plain = _ANSI_RE.sub("", message)
-        if any(token in plain for token in ("需要验证码", "登录态已失效", "用户身份已失效", "密码回退需要验证码")):
+        if any(token in plain for token in ("登录成功", "登录完成", "账号已登录", "安全验证成功")):
+            runtime.login_state = "connected"
+        elif "OneBot V11" in plain and ("connected" in plain.lower() or "连接成功" in plain):
+            runtime.login_state = "connected"
+        elif any(token in plain for token in ("需要验证码", "登录态已失效", "用户身份已失效", "密码回退需要验证码")):
             runtime.login_state = "verification_required"
         elif "连接错误" in plain or "ECONNREFUSED" in plain:
             runtime.login_state = "disconnected"
-        elif "OneBot V11" in plain and ("connected" in plain.lower() or "连接成功" in plain):
-            runtime.login_state = "connected"
 
     def recover_external_logs(self) -> None:
         history = self.event_bus.history()
@@ -245,6 +252,17 @@ class BotManager:
             if active is not None:
                 if active.action == action:
                     return self._action_response(bot_id, action, active)
+                if action == "stop":
+                    # Stop has priority over an in-flight start/login. Queue the
+                    # cleanup immediately, but wait for the current task outside
+                    # this lock so the HTTP request can return at once.
+                    runtime = self._runtime_for(bot_id)
+                    runtime.stop_requested = True
+                    operation = self._new_operation(bot_id, action)
+                    active_task = self._tasks.get(active.id)
+                    task = asyncio.create_task(self._run_operation(operation, active_task))
+                    self._tasks[operation.id] = task
+                    return self._action_response(bot_id, action, operation)
                 raise ConflictError(f"Bot「{bot.name}」正在执行{_action_label(active.action)}，请稍后重试")
 
             current = self.snapshot(bot)
@@ -253,6 +271,11 @@ class BotManager:
             if action == "stop" and current["status"] == "stopped":
                 return self._action_response(bot_id, action, None)
 
+            runtime = self._runtime_for(bot_id)
+            if action in {"start", "restart"}:
+                runtime.stop_requested = False
+            elif action == "stop":
+                runtime.stop_requested = True
             operation = self._new_operation(bot_id, action)
             task = asyncio.create_task(self._run_operation(operation))
             self._tasks[operation.id] = task
@@ -276,7 +299,7 @@ class BotManager:
             "operation": operation.payload() if operation else None,
         }
 
-    async def _run_operation(self, operation: BotOperation) -> None:
+    async def _run_operation(self, operation: BotOperation, wait_for: asyncio.Task[None] | None = None) -> None:
         bot = self.get(operation.bot_id)
         runtime = self._runtime_for(bot.id)
         operation.status = "running"
@@ -286,6 +309,8 @@ class BotManager:
             "restart": "restarting",
         }.get(operation.action, "starting")
         try:
+            if wait_for is not None:
+                await asyncio.gather(wait_for, return_exceptions=True)
             if operation.action == "start":
                 await self._start_now(bot)
                 await self._emit("INFO", bot.name, f"Bot 已启动，监听端口 {bot.port}")
@@ -317,7 +342,9 @@ class BotManager:
     async def _start_now(self, bot: BotConfig, quick_login: str | None = None) -> None:
         if self.onebot.discover(bot) is not None:
             return
-        self._runtime_for(bot.id).login_state = "unknown"
+        runtime = self._runtime_for(bot.id)
+        runtime.login_state = "unknown"
+        runtime.qr_login_requested = False
         self.napcat.sync_onebot_port(bot)
         async with self._napcat_start_lock:
             await self.napcat.start(bot, quick_login=quick_login or bot.qq)
@@ -346,14 +373,43 @@ class BotManager:
         if remaining:
             raise OperationError(f"Bot「{bot.name}」仍有进程未退出：{', '.join(str(pid) for pid in sorted(remaining))}")
 
-    async def request_login(self, bot_id: str, qq: str) -> dict[str, Any]:
+    async def request_login(
+        self,
+        bot_id: str,
+        qq: str,
+        use_password: bool = True,
+        wait_for_active: bool = False,
+    ) -> dict[str, Any]:
         bot = self.get(bot_id)
+        active_task: asyncio.Task[None] | None = None
         async with self._lock_for(bot_id):
             active = self._active_operation(bot_id)
             if active is not None:
+                if not wait_for_active:
+                    raise ConflictError(f"Bot「{bot.name}」正在执行{_action_label(active.action)}，请稍后重试")
+                if active.action == "stop":
+                    raise ConflictError(f"Bot「{bot.name}」正在停止，请稍后重试")
+                active_task = self._tasks.get(active.id)
+
+        # Never hold the per-bot lock while waiting for another lifecycle task.
+        if active_task is not None:
+            await asyncio.gather(active_task, return_exceptions=True)
+
+        async with self._lock_for(bot_id):
+            active = self._active_operation(bot_id)
+            if active is not None:
+                if active.action == "stop":
+                    raise ConflictError(f"Bot「{bot.name}」正在停止，请稍后重试")
                 raise ConflictError(f"Bot「{bot.name}」正在执行{_action_label(active.action)}，请稍后重试")
+            runtime = self._runtime_for(bot_id)
+            if wait_for_active and runtime.stop_requested:
+                raise ConflictError(f"Bot「{bot.name}」正在停止，请稍后重试")
+            if not wait_for_active:
+                runtime.stop_requested = False
+            if use_password:
+                runtime.qr_login_requested = False
             operation = self._new_operation(bot_id, "login")
-            task = asyncio.create_task(self._run_login(operation, qq))
+            task = asyncio.create_task(self._run_login(operation, qq, use_password))
             self._tasks[operation.id] = task
             return {
                 "ok": True,
@@ -364,24 +420,33 @@ class BotManager:
                 "operation": operation.payload(),
             }
 
-    async def _run_login(self, operation: BotOperation, qq: str) -> None:
+    async def _run_login(self, operation: BotOperation, qq: str, use_password: bool = True) -> None:
         bot = self.get(operation.bot_id)
         runtime = self._runtime_for(bot.id)
         operation.status = "running"
         runtime.lifecycle = "logging_in"
+        if not use_password:
+            runtime.login_state = "verification_required"
         try:
             napcat_pids = self.napcat.process_ids_for_bot(bot)
             await terminate_processes(napcat_pids, timeout=7.0)
             self.napcat.forget(bot.id)
+            if runtime.stop_requested:
+                operation.status = "cancelled"
+                return
             async with self._napcat_start_lock:
-                await self.napcat.start(bot, quick_login=qq)
+                await self.napcat.start(bot, quick_login=qq, use_password=use_password)
+            if runtime.stop_requested:
+                operation.status = "cancelled"
+                return
             if self.onebot.discover(bot) is None:
                 await self.onebot.start(bot)
             await self._wait_for_ready(bot)
-            runtime.login_state = "unknown"
+            runtime.login_state = "unknown" if use_password else "verification_required"
             self._invalidate_probe(bot.id)
             operation.status = "succeeded"
-            await self._emit("INFO", bot.name, f"已使用 QQ {qq} 发送快速登录指令")
+            message = f"已使用 QQ {qq} 发送快速登录指令" if use_password else f"已切换为 QQ {qq} 二维码登录"
+            await self._emit("INFO", bot.name, message)
         except asyncio.CancelledError:
             operation.status = "cancelled"
             raise
@@ -398,14 +463,33 @@ class BotManager:
             self._tasks.pop(operation.id, None)
             self._trim_operations()
 
+    async def _queue_qr_login(self, bot_id: str) -> None:
+        try:
+            bot = self.get(bot_id)
+            if self._runtime_for(bot_id).stop_requested:
+                return
+            await self.request_login(bot_id, bot.qq, use_password=False, wait_for_active=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:  # noqa: BLE001 - surfaced in the event log
+            if self._runtime_for(bot_id).stop_requested:
+                return
+            bot = self.repository.get(bot_id)
+            if bot is not None:
+                await self._emit("ERROR", bot.name, f"自动切换二维码登录失败：{error}")
+
     async def stop_now(self, bot_id: str, reason: str = "停止") -> None:
         bot = self.get(bot_id)
+        task: asyncio.Task[None] | None = None
         async with self._lock_for(bot_id):
+            self._runtime_for(bot_id).stop_requested = True
             active = self._active_operation(bot_id)
             if active is not None:
                 task = self._tasks.get(active.id)
-                if task is not None:
-                    await asyncio.gather(task, return_exceptions=True)
+        # Wait without holding the same lock used by lifecycle requests.
+        if task is not None:
+            await asyncio.gather(task, return_exceptions=True)
+        async with self._lock_for(bot_id):
             await self._stop_now(bot)
             await self._emit("INFO", bot.name, f"Bot 已停止（{reason}）")
 

@@ -121,7 +121,18 @@ class EventBus:
         if queue is None:
             self._append_to_storage(event)
         else:
-            await queue.put(event)
+            # Log persistence must never hold up process-tail tasks or the
+            # control API. If disk is temporarily slower than the log stream,
+            # retain the newest events in memory and discard the oldest queued
+            # persistence item instead of blocking every lifecycle request.
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                with suppress(asyncio.QueueEmpty):
+                    queue.get_nowait()
+                    queue.task_done()
+                with suppress(asyncio.QueueFull):
+                    queue.put_nowait(event)
         for subscriber in tuple(self._subscribers):
             try:
                 subscriber.put_nowait(event)

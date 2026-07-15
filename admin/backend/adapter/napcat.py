@@ -68,7 +68,50 @@ class NapCatAdapter(OutputProcessAdapter):
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
             return False
 
-    async def start(self, bot: BotConfig, quick_login: str | None = None) -> None:
+    def _is_launcher(self, process: psutil.Process) -> bool:
+        executable_name = runtime_config.NAPCAT_EXE.name.lower()
+        try:
+            info = process.as_dict(attrs=["name", "cmdline"])
+            command_line = [str(item) for item in (info.get("cmdline") or [])]
+            command = " ".join(command_line).lower()
+            name = str(info.get("name") or "").lower()
+            return executable_name == name or executable_name in command
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError, TypeError):
+            return False
+
+    def _find_launcher(self, bot: BotConfig, listener: psutil.Process | None = None) -> psutil.Process | None:
+        """Find NapCat's launcher instead of treating a QQ worker as the root."""
+        if listener is not None:
+            current = listener
+            seen: set[int] = set()
+            while current.pid not in seen:
+                seen.add(current.pid)
+                if self._is_launcher(current):
+                    return current
+                try:
+                    parent = current.parent()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                    break
+                if parent is None:
+                    break
+                current = parent
+
+        try:
+            candidates = psutil.process_iter(["pid", "name", "cmdline"])
+        except psutil.Error:
+            return None
+        for process in candidates:
+            try:
+                if not self._is_launcher(process):
+                    continue
+                command_line = [str(item) for item in (process.info.get("cmdline") or [])]
+                if bot.qq in command_line or bot.qq in " ".join(command_line):
+                    return process
+            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError):
+                continue
+        return None
+
+    async def start(self, bot: BotConfig, quick_login: str | None = None, use_password: bool = True) -> None:
         if self.is_running_for_bot(bot):
             return
         if not self.available:
@@ -79,7 +122,7 @@ class NapCatAdapter(OutputProcessAdapter):
         environment["ACCOUNT"] = login_account
         environment["NAPCAT_QUICK_ACCOUNT"] = login_account
         environment["NAPCAT_WEBUI_PREFERRED_PORT"] = str(bot.napcat_port)
-        password = reveal_secret(bot.password_secret)
+        password = reveal_secret(bot.password_secret) if use_password else ""
         if password:
             environment["NAPCAT_QUICK_PASSWORD"] = password
             environment.pop("NAPCAT_QUICK_PASSWORD_MD5", None)
@@ -108,25 +151,13 @@ class NapCatAdapter(OutputProcessAdapter):
         if tracked is not None:
             return tracked
         listener = find_listening_process(bot.napcat_port)
+        launcher = self._find_launcher(bot, listener)
+        if launcher is not None:
+            self.attach_external(bot, launcher)
+            return launcher
         if listener is not None:
             self.attach_external(bot, listener)
             return listener
-
-        executable_name = runtime_config.NAPCAT_EXE.name.lower()
-        try:
-            candidates = psutil.process_iter(["pid", "name", "cmdline"])
-        except psutil.Error:
-            return None
-        for process in candidates:
-            try:
-                command_line = [str(item) for item in (process.info.get("cmdline") or [])]
-                command = " ".join(command_line).lower()
-                name = str(process.info.get("name") or "").lower()
-                if (executable_name in command or name == executable_name) and bot.qq in command_line:
-                    self.attach_external(bot, process)
-                    return process
-            except (psutil.NoSuchProcess, psutil.AccessDenied, TypeError):
-                continue
         return None
 
     def external_process(self, bot: BotConfig) -> psutil.Process | None:
@@ -140,4 +171,10 @@ class NapCatAdapter(OutputProcessAdapter):
         process = self.discover(bot)
         if process is not None:
             pids.add(process.pid)
+        listener = find_listening_process(bot.napcat_port)
+        if listener is not None:
+            pids.add(listener.pid)
+        launcher = self._find_launcher(bot, listener)
+        if launcher is not None:
+            pids.add(launcher.pid)
         return pids
