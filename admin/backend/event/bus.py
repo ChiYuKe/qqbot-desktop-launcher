@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections import deque
 from contextlib import suppress
@@ -11,6 +12,9 @@ from typing import Any
 from uuid import uuid4
 
 from backend.config import EVENT_HISTORY_LIMIT
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class EventBus:
@@ -70,7 +74,12 @@ class EventBus:
                 if event is None:
                     return
                 async with self._storage_lock:
-                    await asyncio.to_thread(self._append_to_storage, event)
+                    try:
+                        await asyncio.to_thread(self._append_to_storage, event)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:  # noqa: BLE001 - persistence must not stop the event stream
+                        _LOGGER.exception("持久化管理日志失败")
             finally:
                 queue.task_done()
 

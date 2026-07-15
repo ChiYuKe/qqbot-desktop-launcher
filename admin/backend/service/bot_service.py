@@ -81,6 +81,7 @@ class BotService:
 
     @staticmethod
     def _write_script(script: Path, bot_id: str, port: int, framework: str) -> None:
+        script.parent.mkdir(parents=True, exist_ok=True)
         root = '$root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))\n'
         if framework == "astrbot":
             content = (
@@ -90,7 +91,7 @@ class BotService:
                 + '$python = Join-Path $astrbot ".venv\\Scripts\\python.exe"\n'
                 + 'if (-not (Test-Path $python)) { $python = Join-Path $root ".venv\\Scripts\\python.exe" }\n'
                 + 'if (-not (Test-Path $python)) { $python = "python" }\n'
-                + 'Set-Location $astrbot\n'
+                + 'Set-Location $instance\n'
                 + '$env:ASTRBOT_ROOT = $instance\n'
                 + f'$env:ASTRBOT_BOT_ID = "{bot_id}"\n'
                 + f'$env:ASTRBOT_ONEBOT_PORT = "{port}"\n'
@@ -127,6 +128,9 @@ class BotService:
         await self.event_bus.publish("INFO", "系统", f"删除了 Bot「{bot_id}」")
 
     async def action(self, bot_id: str, action: str) -> dict:
+        bot = self.manager.get(bot_id)
+        if action in {"start", "restart"}:
+            self._write_script(Path(bot.script), bot.id, bot.port, bot.framework)
         return await self.manager.request_action(bot_id, action)
 
     async def update_password(self, bot_id: str, password: str | None) -> None:
@@ -169,6 +173,27 @@ class BotService:
             raise ConflictError(f"NapCat WebUI 端口 {port} 已被其他 Bot 占用")
         self.repository.update_napcat_port(bot_id, port)
         await self.event_bus.publish("INFO", bot.name, f"已更新 NapCat WebUI 端口为 {port}，重启 Bot 后生效")
+
+    def webui_status(self, bot_id: str) -> dict[str, object]:
+        bot = self.manager.get(bot_id)
+        napcat = runtime_config.napcat_webui_credentials(bot.id, bot.napcat_port)
+        # Do not include the token in the status response. It is returned only
+        # when the user explicitly opens or copies the NapCat login details.
+        napcat.pop("token", None)
+        result: dict[str, object] = {"napcat": napcat}
+        if bot.framework == "astrbot":
+            result["astrbot"] = runtime_config.astrbot_dashboard_status(bot.id, bot.napcat_port)
+        return result
+
+    def napcat_webui_credentials(self, bot_id: str) -> dict[str, object]:
+        bot = self.manager.get(bot_id)
+        return runtime_config.napcat_webui_credentials(bot.id, bot.napcat_port)
+
+    def reset_astrbot_password(self, bot_id: str) -> dict[str, object]:
+        bot = self.manager.get(bot_id)
+        if bot.framework != "astrbot":
+            raise ValueError("只有 AstrBot 账号可以重置 WebUI 密码")
+        return runtime_config.reset_astrbot_dashboard_password(bot.id)
 
     async def command(self, bot_id: str, command: str) -> dict:
         command = command.strip()

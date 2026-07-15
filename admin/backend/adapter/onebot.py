@@ -28,6 +28,7 @@ class OneBotAdapter(OutputProcessAdapter):
             status = runtime_config.resource_status()["astrbot"]
             if not status.get("valid"):
                 raise AdapterUnavailableError("AstrBot 资源不完整：需要 main.py、pyproject.toml 和依赖环境")
+            runtime_config.ensure_astrbot_dashboard(bot.id)
             runtime_config.ensure_astrbot_config(bot.id, bot.port, bot.napcat_port)
             return
         runtime_config.ensure_nonebot_environment(bot.port)

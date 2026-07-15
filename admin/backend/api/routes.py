@@ -84,6 +84,12 @@ async def health() -> dict[str, Any]:
     }
 
 
+@router.get("/session")
+async def session_status() -> dict[str, bool]:
+    """Cheap authenticated probe used by the desktop supervisor."""
+    return {"ok": True}
+
+
 @router.post("/ws/ticket")
 async def websocket_ticket() -> dict[str, str]:
     return {"ticket": create_websocket_ticket()}
@@ -118,7 +124,7 @@ async def record_message_stat(payload: StatsRecordPayload, request: Request) -> 
 @router.put("/runtime/resources/{kind}")
 async def update_runtime_resource(kind: str, payload: ResourcePathPayload, request: Request) -> dict[str, Any]:
     try:
-        return service(request).update_resource(kind, payload.path)
+        return await asyncio.to_thread(service(request).update_resource, kind, payload.path)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
 
@@ -126,7 +132,10 @@ async def update_runtime_resource(kind: str, payload: ResourcePathPayload, reque
 @router.post("/runtime/setup")
 async def start_runtime_setup(request: Request, payload: ResourceSetupPayload | None = None) -> dict[str, Any]:
     try:
-        return service(request).start_resource_setup(payload.kinds if payload else ["nonebot"])
+        kinds = payload.kinds if payload else ["nonebot"]
+        # ResourceSetupManager.start schedules its worker on this event loop;
+        # only the long-running work inside that task is moved to a thread.
+        return service(request).start_resource_setup(kinds)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
 
@@ -141,7 +150,7 @@ async def runtime_setup_installer_log() -> FileResponse:
 
 @router.get("/runtime/setup/{job_id}")
 async def runtime_setup_status(job_id: str, request: Request) -> dict[str, Any]:
-    return service(request).resource_setup_status(job_id)
+    return await asyncio.to_thread(service(request).resource_setup_status, job_id)
 
 
 @router.post("/internal/shutdown")
@@ -155,13 +164,15 @@ async def request_shutdown(request: Request) -> dict[str, bool]:
 
 @router.get("/plugins")
 async def list_plugins(request: Request) -> dict[str, Any]:
-    return await asyncio.to_thread(request.app.state.plugin_registry.snapshot)
+    bots = await asyncio.to_thread(request.app.state.repository.list)
+    return await asyncio.to_thread(request.app.state.plugin_registry.snapshot, bots)
 
 
 @router.put("/plugins/{plugin_id}")
 async def update_plugin(plugin_id: str, payload: PluginTogglePayload, request: Request) -> dict[str, Any]:
     try:
-        result = request.app.state.plugin_registry.set_enabled(plugin_id, payload.enabled)
+        bots = await asyncio.to_thread(request.app.state.repository.list)
+        result = await asyncio.to_thread(request.app.state.plugin_registry.set_enabled, plugin_id, payload.enabled, bots)
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     action = "启用" if payload.enabled else "停用"
@@ -348,6 +359,36 @@ async def update_bot_napcat_port(bot_id: str, payload: BotPortPayload, request: 
     try:
         await service(request).update_napcat_port(bot_id, payload.port)
         return {"ok": True}
+    except DomainError as error:
+        raise HTTPException(error.status_code, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@router.get("/bots/{bot_id}/webui/status")
+async def webui_status(bot_id: str, request: Request) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(service(request).webui_status, bot_id)
+    except DomainError as error:
+        raise HTTPException(error.status_code, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@router.get("/bots/{bot_id}/napcat/webui")
+async def napcat_webui_credentials(bot_id: str, request: Request) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(service(request).napcat_webui_credentials, bot_id)
+    except DomainError as error:
+        raise HTTPException(error.status_code, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@router.post("/bots/{bot_id}/astrbot/password/reset")
+async def reset_astrbot_password(bot_id: str, request: Request) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(service(request).reset_astrbot_password, bot_id)
     except DomainError as error:
         raise HTTPException(error.status_code, str(error)) from error
     except ValueError as error:

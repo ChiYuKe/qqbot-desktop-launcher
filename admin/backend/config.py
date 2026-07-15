@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import secrets
+import shutil
+import string
+import tempfile
+import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,6 +29,10 @@ PROCESS_LOG_DIR = DATA_DIR / "process-logs"
 DEFAULT_NONEBOT_DIR = PROGRAM_DIR / "NoneBot"
 DEFAULT_ASTRBOT_DIR = PROGRAM_DIR / "AstrBot"
 DEFAULT_NAPCAT_DIR = NAPCAT_ROOT / "app" / "NapCat.44498.Shell"
+_ASTRBOT_PBKDF2_ITERATIONS = 600_000
+_ASTRBOT_PBKDF2_SALT_BYTES = 16
+_ASTRBOT_DASHBOARD_PASSWORD_LENGTH = 24
+_NAPCAT_WEBUI_TOKEN_RE = re.compile(r"WebUi Token:\s*([^\s]+)", re.IGNORECASE)
 
 
 def _load_resource_paths() -> dict[str, str]:
@@ -173,6 +183,193 @@ def astrbot_dashboard_port(napcat_port: int) -> int:
     return candidate if candidate <= 65535 else max(1024, int(napcat_port) - 1000)
 
 
+def ensure_astrbot_dashboard(bot_id: str) -> dict[str, str | bool]:
+    """Make the per-account AstrBot dashboard available before startup.
+
+    AstrBot resolves its data root from ``ASTRBOT_ROOT`` but its dashboard
+    downloader extracts relative to the process working directory. Managed
+    instances therefore need an explicit, instance-local dashboard check.
+    """
+    instance = astrbot_instance_dir(bot_id)
+    data_dir = instance / "data"
+    dist_dir = data_dir / "dist"
+    index_file = dist_dir / "index.html"
+    if index_file.is_file():
+        return {"available": True, "path": str(dist_dir)}
+
+    archive = data_dir / "dashboard.zip"
+    source_candidates = [
+        ASTRBOT_DIR / "data" / "dist",
+        ASTRBOT_DIR / "astrbot" / "dashboard" / "dist",
+    ]
+    source = next((candidate for candidate in source_candidates if (candidate / "index.html").is_file()), None)
+    if source is not None:
+        dist_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, dist_dir, dirs_exist_ok=True)
+        return {"available": True, "path": str(dist_dir)}
+
+    if not archive.is_file():
+        return {"available": False, "path": str(dist_dir)}
+
+    data_root = data_dir.resolve()
+    try:
+        with zipfile.ZipFile(archive) as package:
+            for member in package.infolist():
+                target = (data_root / member.filename).resolve()
+                if not target.is_relative_to(data_root):
+                    raise ValueError(f"AstrBot Dashboard 压缩包包含不安全路径：{member.filename}")
+                package.extract(member, data_root)
+    except (OSError, zipfile.BadZipFile) as error:
+        raise ValueError(f"AstrBot Dashboard 压缩包无法解压：{archive}") from error
+
+    return {"available": index_file.is_file(), "path": str(dist_dir)}
+
+
+def _load_astrbot_config(bot_id: str) -> tuple[Path, dict[str, object]]:
+    path = astrbot_config_file(bot_id)
+    if not path.exists():
+        return path, {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"AstrBot 配置文件无法解析：{path}") from error
+    if not isinstance(raw, dict):
+        raise ValueError(f"AstrBot 配置文件格式无效：{path}")
+    return path, raw
+
+
+def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = ""
+    try:
+        fd, temporary_path = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+        with os.fdopen(fd, "w", encoding="utf-8-sig") as output:
+            json.dump(payload, output, ensure_ascii=False, indent=2)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path:
+            try:
+                Path(temporary_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _generate_astrbot_dashboard_password() -> str:
+    """Generate a password compatible with AstrBot's dashboard policy."""
+    alphabet = string.ascii_letters + string.digits
+    chars = [
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.digits),
+        *(secrets.choice(alphabet) for _ in range(_ASTRBOT_DASHBOARD_PASSWORD_LENGTH - 3)),
+    ]
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
+
+
+def _hash_astrbot_dashboard_password(password: str) -> tuple[str, str]:
+    """Return AstrBot's PBKDF2 hash and legacy MD5 fallback hash.
+
+    Keep this format aligned with AstrBot's ``auth_password`` utility so the
+    management console can recover an instance without importing its runtime.
+    """
+    salt = secrets.token_hex(_ASTRBOT_PBKDF2_SALT_BYTES)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        bytes.fromhex(salt),
+        _ASTRBOT_PBKDF2_ITERATIONS,
+    ).hex()
+    pbkdf2 = f"pbkdf2_sha256${_ASTRBOT_PBKDF2_ITERATIONS}${salt}${digest}"
+    return pbkdf2, hashlib.md5(password.encode("utf-8")).hexdigest()
+
+
+def _napcat_log_file(bot_id: str) -> Path:
+    return PROCESS_LOG_DIR / f"{bot_id}.napcat.log"
+
+
+def napcat_webui_credentials(bot_id: str, napcat_port: int) -> dict[str, object]:
+    """Read the latest NapCat WebUI token from the local process log.
+
+    NapCat intentionally does not persist this token in ``webui.json``. The
+    managed process log is the only stable local source after the dashboard
+    log view is cleared or filtered to the current session.
+    """
+    path = _napcat_log_file(bot_id)
+    token = ""
+    try:
+        # Process logs can grow for a long-running account; only the tail can
+        # contain the latest token and is enough for recovery.
+        with path.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - 1_000_000))
+            text = stream.read().decode("utf-8", errors="replace")
+        matches = _NAPCAT_WEBUI_TOKEN_RE.findall(text)
+        if matches:
+            token = matches[-1].strip()
+    except (OSError, UnicodeError):
+        pass
+
+    base_url = f"http://127.0.0.1:{int(napcat_port)}/webui"
+    url = f"{base_url}?token={quote(token, safe='')}" if token else base_url
+    return {
+        "available": bool(token),
+        "url": url,
+        "token": token,
+    }
+
+
+def astrbot_dashboard_status(bot_id: str, napcat_port: int) -> dict[str, object]:
+    """Return non-secret AstrBot dashboard recovery status."""
+    _, config = _load_astrbot_config(bot_id)
+    dashboard = config.get("dashboard")
+    dashboard = dashboard if isinstance(dashboard, dict) else {}
+    username = str(dashboard.get("username") or "astrbot")
+    return {
+        "available": bool(dashboard.get("enable", True)),
+        "url": f"http://127.0.0.1:{astrbot_dashboard_port(napcat_port)}",
+        "username": username,
+        "password_configured": bool(dashboard.get("pbkdf2_password") or dashboard.get("password")),
+        "password_change_required": bool(dashboard.get("password_change_required", False)),
+    }
+
+
+def reset_astrbot_dashboard_password(bot_id: str) -> dict[str, object]:
+    """Generate and persist a new AstrBot dashboard password.
+
+    The cleartext password is returned only to the authenticated local API
+    caller and is never sent through the event bus or process logs.
+    """
+    path, config = _load_astrbot_config(bot_id)
+    dashboard = config.setdefault("dashboard", {})
+    if not isinstance(dashboard, dict):
+        dashboard = {}
+        config["dashboard"] = dashboard
+    password = _generate_astrbot_dashboard_password()
+    pbkdf2, md5 = _hash_astrbot_dashboard_password(password)
+    dashboard.update(
+        {
+            "enable": True,
+            "username": str(dashboard.get("username") or "astrbot"),
+            "pbkdf2_password": pbkdf2,
+            "password": md5,
+            "password_storage_upgraded": True,
+            "password_change_required": False,
+        }
+    )
+    config.setdefault("config_version", 2)
+    _write_json_atomic(path, config)
+    return {
+        "username": dashboard["username"],
+        "password": password,
+        "restart_required": True,
+    }
+
+
 def _read_env_value(path: Path, key: str) -> str:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -242,13 +439,7 @@ def ensure_astrbot_config(
 ) -> dict[str, str | int]:
     """Create the per-account AstrBot OneBot reverse-WebSocket configuration."""
     root = astrbot_instance_dir(bot_id)
-    path = astrbot_config_file(bot_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ValueError(f"AstrBot 配置文件无法解析：{path}") from error
-    config = raw if isinstance(raw, dict) else {}
+    path, config = _load_astrbot_config(bot_id)
     platforms = config.setdefault("platform", [])
     if not isinstance(platforms, list):
         platforms = []
@@ -274,7 +465,7 @@ def ensure_astrbot_config(
         config["dashboard"] = dashboard
     dashboard.update({"enable": True, "host": "127.0.0.1", "port": astrbot_dashboard_port(napcat_port)})
     config.setdefault("config_version", 2)
-    path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    _write_json_atomic(path, config)
     return {
         "root": str(root),
         "path": str(path),

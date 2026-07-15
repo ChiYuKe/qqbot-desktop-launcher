@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('externalLinks', {
   open: (url) => ipcRenderer.invoke('open-external', url),
 })
 
+contextBridge.exposeInMainWorld('webUi', {
+  open: (url, title) => ipcRenderer.invoke('open-webui', { url, title }),
+})
+
 contextBridge.exposeInMainWorld('fileDialog', {
   selectDirectory: () => ipcRenderer.invoke('select-directory'),
 })
