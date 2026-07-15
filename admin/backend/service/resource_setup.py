@@ -91,6 +91,9 @@ class ResourceSetupManager:
             "error": None,
             "installer_log_url": "",
         }
+        # Keep a complete last-known state so status requests never wait
+        # indefinitely for a worker that is performing filesystem work.
+        self._status_snapshot: dict[str, object] = copy.deepcopy(self._job)
         self._bots: list[BotConfig] = []
         self._napcat = NapCatAdapter(self._sink)
 
@@ -131,7 +134,8 @@ class ResourceSetupManager:
                 ],
             }
             self._task = asyncio.create_task(self._run(job_id, selected))
-            return copy.deepcopy(self._job)
+            self._cache_snapshot_locked()
+            return copy.deepcopy(self._status_snapshot)
 
     @staticmethod
     def _normalize_kinds(kinds: list[str] | None) -> list[str]:
@@ -144,11 +148,21 @@ class ResourceSetupManager:
         return [kind for kind in SETUP_ORDER if kind in values] or ["nonebot"]
 
     def status(self, job_id: str | None = None) -> dict[str, object]:
-        with self._lock:
-            snapshot = copy.deepcopy(self._job)
+        if self._lock.acquire(timeout=0.5):
+            try:
+                snapshot = copy.deepcopy(self._job)
+                self._status_snapshot = snapshot
+            finally:
+                self._lock.release()
+        else:
+            # Do not let a stalled setup worker block the API event loop.
+            snapshot = copy.deepcopy(self._status_snapshot)
         if job_id and snapshot.get("id") != job_id:
             return {"id": job_id, "status": "missing", "step": "", "message": "找不到配置任务", "progress": 0, "error": "任务不存在或已重启"}
         return snapshot
+
+    def _cache_snapshot_locked(self) -> None:
+        self._status_snapshot = copy.deepcopy(self._job)
 
     async def shutdown(self) -> None:
         self._cancel_event.set()
@@ -932,6 +946,7 @@ class ResourceSetupManager:
                 self._job["step"] = step.get("label", step_id)
             self._job["message"] = message
             self._job["progress"] = int(sum(int(item.get("progress", 0)) for item in tasks if isinstance(item, dict)) / len(tasks))
+            self._cache_snapshot_locked()
 
     def _update_task(self, kind: str, status: str, progress: int | None = None, message: str | None = None) -> None:
         with self._lock:
@@ -952,7 +967,9 @@ class ResourceSetupManager:
             self._job["message"] = message or self._job.get("message", "")
             progress_values = [int(task.get("progress", 0)) for task in tasks if isinstance(task, dict)]
             self._job["progress"] = int(sum(progress_values) / len(progress_values)) if progress_values else 0
+            self._cache_snapshot_locked()
 
     def _update(self, **values: object) -> None:
         with self._lock:
             self._job.update(values)
+            self._cache_snapshot_locked()

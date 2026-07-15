@@ -6,7 +6,7 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import backend.config as runtime_config
 
@@ -41,6 +41,11 @@ class PluginDefinition:
     toggle_supported: bool = False
     metadata_available: bool = False
     error: str | None = None
+    framework: str = "nonebot"
+    bot_id: str | None = None
+    bot_name: str | None = None
+    author: str | None = None
+    version: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +65,11 @@ class PluginDefinition:
             "toggle_supported": self.toggle_supported,
             "metadata_available": self.metadata_available,
             "error": self.error,
+            "framework": self.framework,
+            "bot_id": self.bot_id,
+            "bot_name": self.bot_name,
+            "author": self.author,
+            "version": self.version,
         }
 
 
@@ -73,7 +83,20 @@ class PluginRegistry:
     def root(self) -> Path:
         return (self._root or runtime_config.NONEBOT_DIR).expanduser().resolve()
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, bots: Iterable[Any] | None = None) -> dict[str, Any]:
+        nonebot_snapshot = self._nonebot_snapshot()
+        astrbot_snapshot = _scan_astrbot_plugins(bots or [])
+        return {
+            # Keep the original top-level fields for older desktop clients.
+            "project": nonebot_snapshot["project"],
+            "plugins": nonebot_snapshot["plugins"],
+            "frameworks": {
+                "nonebot": nonebot_snapshot,
+                "astrbot": astrbot_snapshot,
+            },
+        }
+
+    def _nonebot_snapshot(self) -> dict[str, Any]:
         root = self.root
         parsed, config_error = _read_project_config(root / "pyproject.toml")
         plugins = self.scan(parsed=parsed, config_error=config_error)
@@ -148,7 +171,7 @@ class PluginRegistry:
 
         return definitions
 
-    def set_enabled(self, plugin_id: str, enabled: bool) -> dict[str, Any]:
+    def set_enabled(self, plugin_id: str, enabled: bool, bots: Iterable[Any] | None = None) -> dict[str, Any]:
         root = self.root
         config_path = root / "pyproject.toml"
         parsed, config_error = _read_project_config(config_path)
@@ -185,9 +208,200 @@ class PluginRegistry:
             raise ValueError("当前项目没有可编辑的 NoneBot 插件配置")
 
         _atomic_write(config_path, text)
-        updated = self.snapshot()
+        updated = self.snapshot(bots)
         updated["changed"] = {"plugin_id": plugin_id, "enabled": enabled}
         return updated
+
+
+def _scan_astrbot_plugins(bots: Iterable[Any]) -> dict[str, Any]:
+    """Scan the per-account AstrBot plugin stores without importing AstrBot.
+
+    AstrBot resolves ``data/plugins`` relative to ``ASTRBOT_ROOT``.  Managed
+    accounts set that root to ``data/admin/astrbot/instances/<bot_id>`` so the
+    scanner must use the instance path instead of the shared source checkout.
+    """
+    projects: list[dict[str, Any]] = []
+    definitions: list[PluginDefinition] = []
+    seen_bots: set[str] = set()
+
+    for bot in bots:
+        if str(getattr(bot, "framework", "nonebot")).lower() != "astrbot":
+            continue
+        bot_id = str(getattr(bot, "id", "")).strip()
+        if not bot_id or bot_id in seen_bots:
+            continue
+        seen_bots.add(bot_id)
+        bot_name = str(getattr(bot, "name", bot_id) or bot_id)
+        data_root = (runtime_config.astrbot_instance_dir(bot_id) / "data").resolve()
+        plugin_root = data_root / "plugins"
+        projects.append(
+            {
+                "framework": "astrbot",
+                "bot_id": bot_id,
+                "bot_name": bot_name,
+                "path": str(data_root),
+                "config_path": str(data_root / "cmd_config.json"),
+                "exists": data_root.exists(),
+                "valid": plugin_root.is_dir(),
+                "plugin_dirs": ["plugins"],
+                "configuration": "directory",
+            }
+        )
+        if not plugin_root.is_dir():
+            continue
+        try:
+            entries = sorted(plugin_root.iterdir(), key=lambda path: path.name.lower())
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.is_dir() or entry.name.startswith("_"):
+                continue
+            if not ((entry / "main.py").is_file() or (entry / f"{entry.name}.py").is_file()):
+                continue
+            metadata = _read_astrbot_metadata(entry / "metadata.yaml")
+            definitions.append(
+                _astrbot_definition(
+                    entry,
+                    metadata,
+                    data_root=data_root,
+                    bot_id=bot_id,
+                    bot_name=bot_name,
+                )
+            )
+
+    return {
+        "projects": projects,
+        "plugins": [plugin.to_dict() for plugin in definitions],
+    }
+
+
+def _astrbot_definition(
+    plugin_path: Path,
+    metadata: dict[str, Any],
+    *,
+    data_root: Path,
+    bot_id: str,
+    bot_name: str,
+) -> PluginDefinition:
+    package_name = str(metadata.get("name") or plugin_path.name)
+    author = _metadata_text(metadata.get("author"))
+    version = _metadata_text(metadata.get("version"))
+    display_name = _metadata_text(metadata.get("display_name")) or package_name
+    description = _metadata_text(metadata.get("short_desc")) or _metadata_text(metadata.get("desc")) or "未提供插件描述"
+    plugin_id = f"astrbot:{bot_id}:{plugin_path.name}"
+    extra = {
+        key: value
+        for key, value in metadata.items()
+        if key not in {"metadata_available", "error", "display_name", "short_desc", "desc", "name", "author", "version"}
+    }
+    try:
+        display_path = str(plugin_path.relative_to(data_root)).replace("\\", "/")
+    except ValueError:
+        display_path = str(plugin_path)
+    supported_platforms = metadata.get("support_platforms")
+    if isinstance(supported_platforms, str):
+        supported_platforms = [supported_platforms]
+    if not isinstance(supported_platforms, list):
+        supported_platforms = None
+    return PluginDefinition(
+        plugin_id=plugin_id,
+        module_name=plugin_path.name,
+        name=display_name,
+        path=display_path,
+        description=description,
+        usage="由 AstrBot 自动发现并加载，启停请在 AstrBot WebUI 中管理。",
+        homepage=_metadata_text(metadata.get("repo")) or None,
+        supported_adapters=[str(item) for item in supported_platforms] if supported_platforms else None,
+        extra=extra,
+        enabled=True,
+        source="local",
+        load_mode="directory",
+        toggle_supported=False,
+        metadata_available=bool(metadata.get("metadata_available")),
+        error=metadata.get("error"),
+        framework="astrbot",
+        bot_id=bot_id,
+        bot_name=bot_name,
+        author=author or None,
+        version=version or None,
+    )
+
+
+def _read_astrbot_metadata(path: Path) -> dict[str, Any]:
+    """Read the flat metadata.yaml fields used by AstrBot's plugin cards."""
+    try:
+        if not path.is_file():
+            return {"metadata_available": False}
+        if path.stat().st_size > 128 * 1024:
+            return {"metadata_available": False, "error": "metadata.yaml 超过 128 KB，未读取元信息"}
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except (OSError, UnicodeError) as error:
+        return {"metadata_available": False, "error": f"无法读取 metadata.yaml：{error}"}
+
+    metadata: dict[str, Any] = {"metadata_available": True}
+    list_key: str | None = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if list_key and stripped.startswith("-"):
+            metadata.setdefault(list_key, []).append(_parse_yaml_scalar(stripped[1:].strip()))
+            continue
+        match = re.match(r"^\s*([A-Za-z_][\w-]*)\s*:\s*(.*?)\s*$", line)
+        if not match:
+            continue
+        key, raw_value = match.groups()
+        raw_value = _strip_yaml_comment(raw_value).strip()
+        if not raw_value:
+            metadata[key] = []
+            list_key = key
+            continue
+        list_key = None
+        metadata[key] = _parse_yaml_scalar(raw_value)
+    return metadata
+
+
+def _strip_yaml_comment(value: str) -> str:
+    quote = ""
+    for index, char in enumerate(value):
+        if char in {"'", '"'}:
+            quote = "" if quote == char else char if not quote else quote
+        elif char == "#" and not quote and (index == 0 or value[index - 1].isspace()):
+            return value[:index]
+    return value
+
+
+def _parse_yaml_scalar(value: str) -> Any:
+    value = value.strip()
+    if not value:
+        return ""
+    if value[0:1] in {"'", '"'} and value[-1:] == value[0]:
+        try:
+            return ast.literal_eval(value)
+        except (ValueError, SyntaxError):
+            return value[1:-1]
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        if not inner:
+            return []
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else value
+        except json.JSONDecodeError:
+            return [item.strip().strip("'\"") for item in inner.split(",") if item.strip()]
+    if value.lower() in {"true", "false"}:
+        return value.lower() == "true"
+    if value.lower() in {"null", "none", "~"}:
+        return None
+    return value
+
+
+def _metadata_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def _read_project_config(path: Path) -> tuple[dict[str, Any], str | None]:

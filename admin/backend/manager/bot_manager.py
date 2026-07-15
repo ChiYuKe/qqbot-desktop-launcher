@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import logging
 import re
 import time
+from contextlib import suppress
 from typing import Any
 from uuid import uuid4
 
@@ -19,7 +21,13 @@ from backend.event.bus import EventBus
 
 ACTIVE_OPERATION_STATES = {"queued", "running"}
 TRANSITION_STATES = {"starting", "stopping", "restarting", "logging_in"}
+DEFAULT_FRAMEWORK_STARTUP_TIMEOUT = 20.0
+ASTRBOT_STARTUP_TIMEOUT = 180.0
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_LOGGER = logging.getLogger(__name__)
+
+
+StatsRecord = tuple[str, str, Any, str]
 
 
 @dataclass
@@ -71,7 +79,8 @@ class BotManager:
         self._locks: dict[str, asyncio.Lock] = {}
         self._probe_cache: dict[str, tuple[float, Any, Any]] = {}
         self._bot_by_source: dict[str, BotConfig] = {}
-        self._stats_lock = asyncio.Lock()
+        self._stats_queue: asyncio.Queue[StatsRecord | None] | None = None
+        self._stats_task: asyncio.Task[None] | None = None
         self._napcat_start_lock = asyncio.Lock()
         self.refresh_bot_index()
 
@@ -90,7 +99,11 @@ class BotManager:
         # connection/login diagnostics.
         if self._is_napcat_message(message):
             return
-        event = await self.event_bus.publish(level, source, message)
+        try:
+            event = await self.event_bus.publish(level, source, message)
+        except Exception:  # noqa: BLE001 - a log sink must never kill a process tailer
+            _LOGGER.exception("发布 Bot 日志事件失败：source=%s", source)
+            return
         bot = self._bot_by_source.get(source)
         if bot is None:
             return
@@ -109,14 +122,54 @@ class BotManager:
                 occurred_at = datetime.fromisoformat(str(timestamp))
             except ValueError:
                 pass
-        async with self._stats_lock:
-            await asyncio.to_thread(
-                self.stats.record_from_log,
-                bot.id,
-                message,
-                occurred_at,
-                self.stats.event_key(event),
-            )
+        self._queue_stats_record(
+            bot.id,
+            message,
+            occurred_at,
+            self.stats.event_key(event),
+        )
+
+    def _queue_stats_record(
+        self,
+        bot_id: str,
+        message: str,
+        occurred_at: Any,
+        event_key: str,
+    ) -> None:
+        """Queue statistics separately so SQLite cannot stall log delivery."""
+        if self._stats_queue is None:
+            self._stats_queue = asyncio.Queue(maxsize=2000)
+        if self._stats_task is None or self._stats_task.done():
+            self._stats_task = asyncio.create_task(self._stats_loop())
+        item: StatsRecord = (bot_id, message, occurred_at, event_key)
+        try:
+            self._stats_queue.put_nowait(item)
+        except asyncio.QueueFull:
+            # Dashboard logs are more important than an optional counter. Drop
+            # only the oldest statistics item when the database is slower than
+            # the Bot output.
+            with suppress(asyncio.QueueEmpty):
+                self._stats_queue.get_nowait()
+                self._stats_queue.task_done()
+            with suppress(asyncio.QueueFull):
+                self._stats_queue.put_nowait(item)
+
+    async def _stats_loop(self) -> None:
+        queue = self._stats_queue
+        if queue is None:
+            return
+        while True:
+            item = await queue.get()
+            try:
+                if item is None:
+                    return
+                await asyncio.to_thread(self.stats.record_from_log, *item)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - statistics must not affect Bot control
+                _LOGGER.exception("写入 Bot 消息统计失败")
+            finally:
+                queue.task_done()
 
     @staticmethod
     def _is_napcat_message(message: str) -> bool:
@@ -177,10 +230,16 @@ class BotManager:
             }.get(operation.action, "starting")
         elif onebot is not None:
             status = "login_required" if runtime.login_state == "verification_required" else "running"
-        elif napcat is not None:
-            status = "starting"
         elif runtime.last_error:
             status = "error"
+        elif napcat is not None and runtime.login_state == "disconnected":
+            # NapCat can remain alive after the framework process exits. Do
+            # not present that orphaned protocol process as a successful start.
+            framework_label = "AstrBot" if bot.framework == "astrbot" else "NoneBot"
+            runtime.last_error = f"{framework_label} 未监听端口 {bot.port}"
+            status = "error"
+        elif napcat is not None:
+            status = "starting"
         else:
             status = "stopped"
 
@@ -255,22 +314,27 @@ class BotManager:
                     return self._action_response(bot_id, action, active)
                 if action == "stop":
                     # Stop has priority over an in-flight start/login. Queue the
-                    # cleanup immediately, but wait for the current task outside
-                    # this lock so the HTTP request can return at once.
+                    # cleanup immediately and cancel the current task outside
+                    # this lock so a stuck readiness wait cannot block cleanup.
                     runtime = self._runtime_for(bot_id)
                     runtime.stop_requested = True
                     operation = self._new_operation(bot_id, action)
                     active_task = self._tasks.get(active.id)
+                    if active_task is not None and not active_task.done():
+                        active_task.cancel()
                     task = asyncio.create_task(self._run_operation(operation, active_task))
                     self._tasks[operation.id] = task
                     return self._action_response(bot_id, action, operation)
                 raise ConflictError(f"Bot「{bot.name}」正在执行{_action_label(active.action)}，请稍后重试")
 
-            current = self.snapshot(bot)
-            if action == "start" and current["status"] in {"running", "login_required"}:
-                return self._action_response(bot_id, action, None)
-            if action == "stop" and current["status"] == "stopped":
-                return self._action_response(bot_id, action, None)
+            # A stop request must not perform a synchronous psutil probe before
+            # it is acknowledged. Even if the cached status is stale, the
+            # cleanup operation is idempotent and can safely discover that no
+            # process remains.
+            if action != "stop":
+                current = self.snapshot(bot)
+                if action == "start" and current["status"] in {"running", "login_required"}:
+                    return self._action_response(bot_id, action, None)
 
             runtime = self._runtime_for(bot_id)
             if action in {"start", "restart"}:
@@ -358,16 +422,26 @@ class BotManager:
             raise
         self._invalidate_probe(bot.id)
 
-    async def _wait_for_ready(self, bot: BotConfig, timeout: float = 20.0) -> None:
-        deadline = time.monotonic() + timeout
+    async def _wait_for_ready(self, bot: BotConfig, timeout: float | None = None) -> None:
+        framework_label = "AstrBot" if bot.framework == "astrbot" else "NoneBot"
+        startup_timeout = timeout if timeout is not None else (
+            ASTRBOT_STARTUP_TIMEOUT if bot.framework == "astrbot" else DEFAULT_FRAMEWORK_STARTUP_TIMEOUT
+        )
+        deadline = time.monotonic() + startup_timeout
+        framework_ready = False
+        napcat_ready = False
         while time.monotonic() < deadline:
-            nonebot_ready = find_listening_process(bot.port) is not None and self.onebot.discover(bot) is not None
+            framework_ready = find_listening_process(bot.port) is not None and self.onebot.discover(bot) is not None
             napcat_ready = self.napcat.discover(bot) is not None
-            if nonebot_ready and napcat_ready:
+            if framework_ready and napcat_ready:
                 return
+            if not framework_ready and self.onebot.tracked_process(bot.id) is None:
+                raise OperationError(
+                    f"Bot「{bot.name}」启动失败：{framework_label} 进程已退出，端口 {bot.port} 未监听"
+                )
             await asyncio.sleep(0.25)
-        if not nonebot_ready:
-            raise OperationError(f"Bot「{bot.name}」启动超时：NoneBot 未在端口 {bot.port} 监听")
+        if not framework_ready:
+            raise OperationError(f"Bot「{bot.name}」启动超时：{framework_label} 未在端口 {bot.port} 监听")
         raise OperationError(f"Bot「{bot.name}」启动超时：NapCat 进程未保持运行")
 
     async def _stop_now(self, bot: BotConfig) -> None:
@@ -492,6 +566,8 @@ class BotManager:
             active = self._active_operation(bot_id)
             if active is not None:
                 task = self._tasks.get(active.id)
+                if task is not None and not task.done():
+                    task.cancel()
         # Wait without holding the same lock used by lifecycle requests.
         if task is not None:
             await asyncio.gather(task, return_exceptions=True)
@@ -515,6 +591,16 @@ class BotManager:
         tasks = tuple(self._tasks.values())
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        stats_task = self._stats_task
+        stats_queue = self._stats_queue
+        if stats_task is not None and not stats_task.done():
+            if stats_queue is not None:
+                with suppress(asyncio.QueueFull):
+                    stats_queue.put_nowait(None)
+            with suppress(asyncio.CancelledError, asyncio.TimeoutError):
+                await asyncio.wait_for(stats_task, timeout=2.0)
+        self._stats_task = None
+        self._stats_queue = None
         # Only processes started by this backend belong to its shutdown scope.
         # Discovered external processes must remain available for the next session.
         await self.onebot.shutdown()
