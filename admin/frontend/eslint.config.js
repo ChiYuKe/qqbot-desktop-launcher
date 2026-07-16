@@ -21,7 +21,11 @@ export default [
       ...reactHooks.configs.recommended.rules,
       'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
+      // The dashboard intentionally syncs local UI state with remote resource
+      // changes and uses refs for live display anchors.
+      'react-hooks/set-state-in-effect': 'warn',
+      'react-hooks/purity': 'warn',
+      'react-hooks/refs': 'warn',
     },
   },
 ]
-

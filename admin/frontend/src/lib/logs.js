@@ -1,6 +1,8 @@
 import { normalizeLocalUrl } from './bot.js'
 
 const LOG_SESSION_STARTED_AT = Math.floor(Date.now() / 1000) * 1000
+const ANSI_ESCAPE = String.fromCharCode(27)
+const ANSI_ESCAPE_PATTERN = new RegExp(`${ANSI_ESCAPE}\\[[0-?]*[ -/]*[@-~]`, 'g')
 
 export function orderLogs(logs) {
   return Array.isArray(logs) ? [...logs].reverse().slice(-500) : []
@@ -39,7 +41,7 @@ export function orderCurrentSessionLogs(logs) {
 }
 
 export function cleanLogMessage(message) {
-  return String(message || '').replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\[\d+(?:;\d+)*m/g, '')
+  return String(message || '').replace(ANSI_ESCAPE_PATTERN, '').replace(/\[\d+(?:;\d+)*m/g, '')
 }
 
 function isQrArt(message) {

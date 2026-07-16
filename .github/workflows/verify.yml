@@ -23,7 +23,10 @@ jobs:
             admin/desktop/package-lock.json
       - run: python -m venv .venv
       - run: .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-      - run: npm ci --prefix admin\frontend
-      - run: npm ci --prefix admin\desktop
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: admin/frontend
+      - name: Install desktop dependencies
+        run: npm ci
+        working-directory: admin/desktop
       - run: .\scripts\verify.ps1
-

@@ -25,7 +25,7 @@ export async function api(path, options, timeoutMs = 15000) {
     if (!response.ok) throw new Error(payload.detail || `请求失败 (${response.status})`)
     return payload
   } catch (error) {
-    if (error?.name === 'AbortError') throw new Error('管理服务响应超时，请重启控制台后重试')
+    if (error?.name === 'AbortError') throw new Error('管理服务响应超时，请重启控制台后重试', { cause: error })
     throw error
   } finally {
     window.clearTimeout(timeout)

@@ -403,7 +403,7 @@ class ResourceSetupManager:
             self._update_step("napcat", "extract", "succeeded", 100, "一键包已解压，找到 NapCatInstaller.exe。")
             shell_fallback = False
             try:
-                package_root = self._run_napcat_installer(installer, extract_dir)
+                self._run_napcat_installer(installer, extract_dir)
             except NapCatInstallerFailure as error:
                 if not error.qq_download_failed:
                     raise

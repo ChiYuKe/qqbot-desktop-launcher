@@ -4,7 +4,7 @@ import {
   Activity, ArrowLeft, Bell, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, CircleUserRound, Cpu,
   Copy, Database, Download, Eye, EyeOff, ExternalLink, FileText, FolderOpen, Gauge, Image as ImageIcon, Keyboard, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Palette, Pause, Play,
   Maximize2, Minimize2, Plus, Power, Puzzle, RefreshCw, RotateCcw, Search, Server,
-  Paintbrush, Settings, ShieldCheck, SlidersHorizontal, Square, SquareTerminal, Star, Sun, Trash2, UserRound, Users, Volume2, Wifi, X,
+  Paintbrush, Settings, ShieldCheck, SlidersHorizontal, Square, SquareTerminal, Star, Sun, Trash2, UserRound, Users, Volume2, X,
 } from 'lucide-react'
 import './styles.css'
 import './layout.css'
@@ -188,6 +188,7 @@ function App() {
   const dashboardLoadingRef = useRef(false)
   const webUiMenuRef = useRef(null)
   const notificationStateRef = useRef(notificationState)
+  const resourceSetupAutoOpenedRef = useRef(false)
   const [theme, setTheme] = useState(() => window.localStorage.getItem('qq-console-theme') || 'system')
   const [themePackage, setThemePackage] = useState(() => {
     const saved = window.localStorage.getItem(THEME_PACKAGE_STORAGE_KEY)
@@ -266,11 +267,6 @@ function App() {
       document.removeEventListener('keydown', closeOnEscape)
     }
   }, [webUiMenuOpen])
-
-  useEffect(() => {
-    if (!resources) return
-    if (!resources.initialized) setResourceSetupOpen(true)
-  }, [resources?.initialized])
 
   useEffect(() => {
     let disposed = false
@@ -384,7 +380,13 @@ function App() {
           : fallbackLogs)
       }
       if (napcatData) setNapcat(napcatData)
-      if (resourceData) setResources(resourceData)
+      if (resourceData) {
+        setResources(resourceData)
+        if (!resourceSetupAutoOpenedRef.current && !resourceData.initialized) {
+          resourceSetupAutoOpenedRef.current = true
+          setResourceSetupOpen(true)
+        }
+      }
       if (pluginData) {
         const normalizedPlugins = normalizePluginFrameworks(pluginData)
         setPluginFrameworks(normalizedPlugins)
@@ -769,7 +771,7 @@ function App() {
     {notificationOpen && <NotificationCenterModal items={notificationState.items.filter(isNotificationActive)} onClose={() => setNotificationOpen(false)} />}
     {createOpen && <CreateAccountModal account={newAccount} creating={creating} onChange={setNewAccount} onClose={closeCreateModal} onSubmit={createAccount} />}
     {deleteTarget && <DeleteAccountModal bot={deleteTarget} deleting={deleting} onClose={() => !deleting && setDeleteTarget(null)} onConfirm={deleteAccount} />}
-    {resources && resourceSetupOpen && <ResourceSetupModal resources={resources} setup={resourceSetup} onSetup={startResourceSetup} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onClose={() => setResourceSetupOpen(false)} />}
+    {resources && resourceSetupOpen && <ResourceSetupModal key={resourceSetup?.id || 'new'} resources={resources} setup={resourceSetup} onSetup={startResourceSetup} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onClose={() => setResourceSetupOpen(false)} />}
     {toast && <div className="toast"><span className="live-dot" />{toast}</div>}
   </div>
 }
@@ -817,14 +819,11 @@ function NotificationCenterModal({ items, onClose }) {
 
 function EmbeddedWebUiPage({ target, onClose }) {
   const [frameKey, setFrameKey] = useState(0)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    setLoading(true)
-  }, [target.url])
+  const [loadedUrl, setLoadedUrl] = useState('')
+  const loading = loadedUrl !== target.url
 
   const refresh = () => {
-    setLoading(true)
+    setLoadedUrl('')
     setFrameKey((key) => key + 1)
   }
 
@@ -835,7 +834,7 @@ function EmbeddedWebUiPage({ target, onClose }) {
     </div>
     <div className="embedded-webui-frame-wrap">
       {loading && <div className="embedded-webui-loading">正在加载 {target.kind === 'napcat' ? 'NapCat' : 'AstrBot'} WebUI…</div>}
-      <iframe key={`${target.url}-${frameKey}`} title={target.title} src={target.url} onLoad={() => setLoading(false)} />
+      <iframe key={`${target.url}-${frameKey}`} title={target.title} src={target.url} onLoad={() => setLoadedUrl(target.url)} />
     </div>
   </section>
 }
@@ -846,21 +845,18 @@ function WindowControls() {
 }
 
 function useAuthenticatedMedia(path, enabled) {
-  const [url, setUrl] = useState('')
-  const [error, setError] = useState('')
+  const [media, setMedia] = useState({ path: '', enabled: false, url: '', error: '' })
 
   useEffect(() => {
     let active = true
     let objectUrl = ''
-    setUrl('')
-    setError('')
     if (!enabled) return () => {}
     fetchAuthenticatedBlob(path).then((blob) => {
       if (!active) return
       objectUrl = URL.createObjectURL(blob)
-      setUrl(objectUrl)
+      setMedia({ path, enabled, url: objectUrl, error: '' })
     }).catch((reason) => {
-      if (active) setError(reason.message || '资源加载失败')
+      if (active) setMedia({ path, enabled, url: '', error: reason.message || '资源加载失败' })
     })
     return () => {
       active = false
@@ -868,7 +864,8 @@ function useAuthenticatedMedia(path, enabled) {
     }
   }, [path, enabled])
 
-  return { url, error }
+  if (media.path !== path || media.enabled !== enabled) return { url: '', error: '' }
+  return { url: media.url, error: media.error }
 }
 
 function NavItem({ icon: Icon, label, active, onClick, favoriteKey, favorite, onToggleFavorite }) {
@@ -878,7 +875,7 @@ function NavItem({ icon: Icon, label, active, onClick, favoriteKey, favorite, on
 
 function PluginPage({ frameworks = EMPTY_PLUGIN_FRAMEWORKS, refreshing, onRefresh, busy, onToggle }) {
   const [framework, setFramework] = useState('nonebot')
-  const [expanded, setExpanded] = useState('')
+  const [expanded, setExpanded] = useState({ framework: 'nonebot', id: '' })
   const current = frameworks[framework] || EMPTY_PLUGIN_FRAMEWORKS[framework]
   const plugins = current?.plugins || []
   const project = current?.project || null
@@ -894,7 +891,7 @@ function PluginPage({ frameworks = EMPTY_PLUGIN_FRAMEWORKS, refreshing, onRefres
     ? (projects.length ? projects.map((item) => `${item.bot_name || item.bot_id}：${item.path}/plugins`).join('、') : '来自 AstrBot 实例的 data/plugins')
     : (project?.plugin_dirs?.length ? `插件目录：${project.plugin_dirs.join('、')}` : '来自 NoneBot 项目配置与本地插件目录')
 
-  useEffect(() => setExpanded(''), [framework])
+  const expandedId = expanded.framework === framework ? expanded.id : ''
   const discoveredSummary = isAstrBot ? `${plugins.length} 个已发现` : `${enabledCount} 个启用`
 
   return <section className="plugin-page">
@@ -931,7 +928,7 @@ function PluginPage({ frameworks = EMPTY_PLUGIN_FRAMEWORKS, refreshing, onRefres
 
     <div className="plugin-list">
       {plugins.length ? plugins.map((plugin) => {
-        const isExpanded = expanded === plugin.plugin_id
+        const isExpanded = expandedId === plugin.plugin_id
         const isBusy = busy === `plugin:${plugin.plugin_id}`
         return <article className={`plugin-row ${plugin.enabled ? 'enabled' : 'disabled'}`} key={plugin.plugin_id}>
           <div className="plugin-row-main">
@@ -944,7 +941,7 @@ function PluginPage({ frameworks = EMPTY_PLUGIN_FRAMEWORKS, refreshing, onRefres
             </div>
             <div className="plugin-row-actions">
               {plugin.toggle_supported ? <button type="button" role="switch" aria-checked={plugin.enabled} className={`plugin-toggle ${plugin.enabled ? 'enabled' : ''}`} onClick={() => onToggle(plugin, !plugin.enabled)} disabled={isBusy} title={plugin.enabled ? '停用插件' : '启用插件'}><Power size={14} />{isBusy ? '保存中' : plugin.enabled ? '停用' : '启用'}</button> : <span className="plugin-managed">{isAstrBot ? 'AstrBot 管理' : '自动加载'}</span>}
-              <button type="button" className="plain-icon plugin-expand" onClick={() => setExpanded(isExpanded ? '' : plugin.plugin_id)} aria-expanded={isExpanded} aria-label={isExpanded ? '收起插件详情' : '展开插件详情'} title={isExpanded ? '收起详情' : '查看详情'}><ChevronDown size={16} /></button>
+              <button type="button" className="plain-icon plugin-expand" onClick={() => setExpanded({ framework, id: isExpanded ? '' : plugin.plugin_id })} aria-expanded={isExpanded} aria-label={isExpanded ? '收起插件详情' : '展开插件详情'} title={isExpanded ? '收起详情' : '查看详情'}><ChevronDown size={16} /></button>
             </div>
           </div>
           {isExpanded && <div className="plugin-details">
@@ -979,12 +976,6 @@ function AccountWorkspace({ bots, selectedBot, selectedBotId, setSelectedBotId, 
     if (selectedBot?.status === 'running' || selectedBot?.login_state === 'connected') return null
     return findLoginVerification(botLogs)
   }, [botLogs, selectedBot?.login_state, selectedBot?.status])
-
-  useEffect(() => {
-    setDetailView('overview')
-    setVisibleQrKey('')
-    autoOpenedQrKey.current = ''
-  }, [selectedBot?.id])
 
   useEffect(() => {
     if (feedRef.current && visibleLogs.length && followLogsRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight
@@ -1032,7 +1023,7 @@ function AccountWorkspace({ bots, selectedBot, selectedBotId, setSelectedBotId, 
           {detailView === 'overview' ? <>
           <div className="account-summary"><div className="summary-row"><span>状态</span><StatusPill label={botStatusLabel(selectedBot)} state={botStatusState(selectedBot)} /></div><div className="summary-row"><span>持续运行</span><BotUptime bot={selectedBot} /></div><div className="summary-row"><span>QQ 号</span><b className="summary-value mono">{selectedBot.qq}</b></div><div className="summary-row"><span>协议端</span><StatusPill label="NapCat" state={!napcat.available ? 'red' : selectedBot.runtime?.napcat?.running ? 'green' : 'muted'} /></div><div className="summary-row"><span>机器人框架</span><StatusPill label={selectedBot.framework_label || (selectedBot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')} state={selectedBot.runtime?.framework?.running ? 'green' : 'muted'} /></div><div className="summary-row"><span>OneBot 端口</span><b className="summary-value mono">{selectedBot.port || '—'}</b></div><div className="summary-row"><span>NapCat WebUI</span><b className="summary-value mono">{selectedBot.napcat_port || '—'}</b></div></div>
           <div className="conversation"><div className="conversation-header"><div><h3>实时活动</h3><span>{logsPaused ? '日志同步已暂停' : '来自本机服务的最新状态'}</span></div><div className="conversation-tools"><button className="plain-icon" onClick={onTogglePause} aria-label={logsPaused ? '恢复日志' : '暂停日志'} title={logsPaused ? '恢复日志更新' : '暂停日志更新'}>{logsPaused ? <Play size={15} /> : <Pause size={15} />}</button><button className="plain-icon" onClick={onClear} aria-label="清空日志" title="清空日志"><Trash2 size={15} /></button></div></div>{verification && <LoginVerificationCard verification={verification} onRetry={async () => { try { await onCommand(selectedBot, `-q ${selectedBot.qq}`, botLogs); onNotice('已重新尝试登录，请等待二维码或登录结果') } catch (error) { onNotice(`重新登录失败：${error.message}`) } }} onNotice={onNotice} />}<div className="activity-feed" ref={feedRef} onScroll={() => { const feed = feedRef.current; if (feed) followLogsRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 24 }}>{visibleLogs.length ? visibleLogs.map((log, index) => { const qrKey = `${log.time}-${log.source}-${index}`; return <LogItem key={qrKey} log={log} qrVisible={visibleQrKey === qrKey} onToggleQr={() => setVisibleQrKey(visibleQrKey === qrKey ? '' : qrKey)} /> }) : <div className="activity-empty">暂无日志</div>}</div><div className="command-box"><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="输入 -q 2 快速登录…" onKeyDown={(event) => { if (event.key === 'Enter') submitCommand() }} /><button onClick={submitCommand} aria-label="发送"><Play size={14} /></button></div></div>
-           </> : <AccountConfig bot={selectedBot} onSavePassword={onSavePassword} onSavePort={onSavePort} onSaveNapcatPort={onSaveNapcatPort} onSaveFramework={onSaveFramework} onOpenWebUi={onOpenWebUi} onNotice={onNotice} />}
+           </> : <AccountConfig key={`${selectedBot.id}-${selectedBot.port}-${selectedBot.napcat_port}-${selectedBot.framework}`} bot={selectedBot} onSavePassword={onSavePassword} onSavePort={onSavePort} onSaveNapcatPort={onSaveNapcatPort} onSaveFramework={onSaveFramework} onOpenWebUi={onOpenWebUi} onNotice={onNotice} />}
         </div>
       </> : <EmptyDetail onCreate={onCreate} />}
     </div>
@@ -1047,9 +1038,6 @@ function WebUiCredentials({ bot, onOpenWebUi, onNotice }) {
 
   useEffect(() => {
     let active = true
-    setStatus(null)
-    setNapcatToken('')
-    setResetCredentials(null)
     api(`/api/bots/${bot.id}/webui/status`).then((result) => {
       if (active) setStatus(result)
     }).catch((error) => {
@@ -1173,14 +1161,6 @@ function AccountConfig({ bot, onSavePassword, onSavePort, onSaveNapcatPort, onSa
   const [savingNapcatPort, setSavingNapcatPort] = useState(false)
   const [savingFramework, setSavingFramework] = useState(false)
 
-  useEffect(() => {
-    setPort(String(bot.port || ''))
-    setNapcatPort(String(bot.napcat_port || ''))
-    setFramework(bot.framework || 'nonebot')
-    setPassword('')
-    setPasswordEditing(false)
-  }, [bot.id, bot.port, bot.napcat_port, bot.framework])
-
   const save = async (event) => {
     event.preventDefault()
     if (bot.password_configured && !passwordEditing) {
@@ -1274,12 +1254,11 @@ function BotUptime({ bot, className = '' }) {
 function BotAvatar({ bot, className = '' }) {
   const qq = String(bot?.qq || '').trim()
   const avatarUrl = qq ? `https://q1.qlogo.cn/g?b=qq&nk=${encodeURIComponent(qq)}&s=640` : ''
-  const [failed, setFailed] = useState(false)
-
-  useEffect(() => setFailed(false), [avatarUrl])
+  const [failedUrl, setFailedUrl] = useState('')
+  const failed = failedUrl === avatarUrl
 
   return <div className={`bot-avatar ${className}`} title={`${bot?.name || 'Bot'} 头像`} aria-label={`${bot?.name || 'Bot'} 头像`}>
-    {avatarUrl && !failed ? <img className="bot-avatar-image" src={avatarUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailed(true)} /> : <Bot size={15} />}
+    {avatarUrl && !failed ? <img className="bot-avatar-image" src={avatarUrl} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setFailedUrl(avatarUrl)} /> : <Bot size={15} />}
   </div>
 }
 
@@ -1345,7 +1324,7 @@ function ImageMessage({ image }) {
       anchor.download = filename
       anchor.click()
       URL.revokeObjectURL(url)
-    } catch (error) {
+    } catch {
       setFailed(true)
     }
   }
@@ -1394,7 +1373,10 @@ function ResourceSetupModal({ resources, setup, onSetup, onSelect, onRefresh, on
     { kind: 'astrbot', label: 'AstrBot', resource: resources.astrbot, file: 'main.py + pyproject.toml', description: '可选机器人框架，使用官方源码和 OneBot 反向 WS。' },
     { kind: 'napcat', label: 'NapCat', resource: resources.napcat, file: 'NapCatWinBootMain.exe', description: '可选协议端，优先执行官方 OneKey；失败时切换 Shell 并使用本机 QQ。' },
   ]
-  const [selectedKinds, setSelectedKinds] = useState(['nonebot', 'napcat'])
+  const [selectedKinds, setSelectedKinds] = useState(() => {
+    if (Array.isArray(setup?.kinds) && setup.kinds.length) return setup.kinds.filter((kind) => items.some((item) => item.kind === kind))
+    return ['nonebot', 'napcat']
+  })
   const setupRunning = setup?.status === 'running'
   const [logDownloading, setLogDownloading] = useState(false)
   const downloadInstallerLog = async () => {
@@ -1408,10 +1390,6 @@ function ResourceSetupModal({ resources, setup, onSetup, onSelect, onRefresh, on
       setLogDownloading(false)
     }
   }
-  useEffect(() => {
-    if (Array.isArray(setup?.kinds) && setup.kinds.length) setSelectedKinds(setup.kinds.filter((kind) => items.some((item) => item.kind === kind)))
-  }, [setup?.id])
-
   const toggleKind = (kind) => {
     if (setupRunning) return
     setSelectedKinds((current) => current.includes(kind) ? current.filter((item) => item !== kind) : [...current, kind])
@@ -1559,7 +1537,7 @@ function ServiceSettings({ online, onNavigate, onRefresh }) {
   return <div className="settings-content"><div className="settings-page-heading"><div className="eyebrow">应用设置</div><h1>服务</h1><p>查看管理服务连接状态，并快速打开运行资源配置。</p></div><SettingsPanel title="管理服务" description="控制台会从本机管理 API 读取状态。"><SettingsRow title="管理 API" description="本机 6700 端口的后台服务。" action={<span className={`settings-status-badge ${online ? 'online' : ''}`}><i />{online ? '连接正常' : '等待连接'}</span>} /><div className="settings-actions inline"><span><strong>{online ? '服务在线' : '服务离线'}</strong><small>重新读取账号与资源状态</small></span><button type="button" className="secondary" onClick={onRefresh}><RefreshCw size={14} />刷新状态</button></div></SettingsPanel><SettingsPanel title="运行资源" description="进入对应资源页面可以选择目录或执行一键配置。"><div className="service-entry-list">{resources.map(([label, Icon]) => <button type="button" className="service-entry" key={label} onClick={() => onNavigate(label)}><span className="service-entry-icon"><Icon size={16} /></span><span><strong>{label}</strong><small>打开资源配置</small></span><ChevronRight size={15} /></button>)}</div></SettingsPanel></div>
 }
 
-function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, refresh, busy, action, onSelectBot }) {
+function RuntimeStatusPage({ bots, system, stats, napcat, online, busy, action, onSelectBot }) {
   const [period, setPeriod] = useState('day')
   const [chartMode, setChartMode] = useState('daily')
   const [intradayDay, setIntradayDay] = useState('')
@@ -1670,10 +1648,8 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, re
     : '本机资源占用'
   const pageSize = 3
   const pageCount = Math.max(1, Math.ceil(bots.length / pageSize))
-  const visibleBots = bots.slice((botPage - 1) * pageSize, botPage * pageSize)
-  useEffect(() => {
-    setBotPage((page) => Math.min(page, pageCount))
-  }, [pageCount])
+  const currentBotPage = Math.min(botPage, pageCount)
+  const visibleBots = bots.slice((currentBotPage - 1) * pageSize, currentBotPage * pageSize)
   useEffect(() => {
     const ratio = chartHoverRatioRef.current
     if (!hasSeriesData || ratio === null || !chartSeries.length) {
@@ -1684,12 +1660,6 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, re
     const nextIndex = chartSeries.length === 1 ? 0 : Math.round(ratio * (chartSeries.length - 1))
     setHoveredChartIndex((current) => current === nextIndex ? current : nextIndex)
   }, [period, chartMode, intradayDay, chartSeries.length, hasSeriesData])
-  useEffect(() => {
-    if (period !== 'day') {
-      setChartMode('daily')
-      setIntradayDay('')
-    }
-  }, [period])
   return <section className="runtime-page">
     <div className="runtime-metrics">
       <div className="runtime-metric"><div className="runtime-metric-icon purple"><Bot size={19} /></div><div><span>在线 Bot</span><strong>{runningBots.length}<small> / {bots.length}</small></strong><em>全部在线</em></div></div>
@@ -1699,7 +1669,7 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, re
     </div>
 
     <section className="runtime-section runtime-stats-section">
-      <div className="runtime-section-heading runtime-stats-heading"><div><h2>消息趋势 <button className="runtime-info" type="button" title="查看消息统计说明" aria-label="查看消息统计说明"><CircleHelp size={14} /></button></h2><p>{showIntraday ? `${chartLabel({ day: selectedIntradayDay })} 按小时的收发消息统计` : '最近 14 天的收发消息统计 · 悬停日期后滚轮查看时分'}</p></div><div className="runtime-period-tabs">{[['day', '今日'], ['week', '本周'], ['month', '本月']].map(([value, label]) => <button key={value} className={period === value ? 'selected' : ''} onClick={() => setPeriod(value)}>{label}</button>)}</div></div>
+      <div className="runtime-section-heading runtime-stats-heading"><div><h2>消息趋势 <button className="runtime-info" type="button" title="查看消息统计说明" aria-label="查看消息统计说明"><CircleHelp size={14} /></button></h2><p>{showIntraday ? `${chartLabel({ day: selectedIntradayDay })} 按小时的收发消息统计` : '最近 14 天的收发消息统计 · 悬停日期后滚轮查看时分'}</p></div><div className="runtime-period-tabs">{[['day', '今日'], ['week', '本周'], ['month', '本月']].map(([value, label]) => <button key={value} className={period === value ? 'selected' : ''} onClick={() => { setPeriod(value); if (value !== 'day') { setChartMode('daily'); setIntradayDay('') } }}>{label}</button>)}</div></div>
       <div className="runtime-analytics-grid">
         <div className="runtime-chart-panel">
           <div className="runtime-chart-head"><div className="runtime-chart-legend"><span><i className="received" />收到</span><span><i className="sent" />发出</span></div></div>
@@ -1713,7 +1683,7 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, re
     </section>
 
     <div className="runtime-columns">
-      <section className="runtime-section runtime-bots-section"><div className="runtime-section-heading"><div><h2>Bot 运行概况 <small>共 {bots.length} 个账号</small></h2></div></div>{bots.length ? <><div className="runtime-bot-table"><div className="runtime-bot-table-head"><span>Bot</span><span>QQ 号</span><span>状态</span><span>今日消息</span><span>OneBot 端口</span><span>机器人框架</span><span>操作</span></div>{visibleBots.map((bot) => { const running = isBotRunning(bot); const transitioning = isBotTransitioning(bot); const botTotal = Number(botStats.get(String(bot.id))?.total || 0); return <div className="runtime-bot-row" key={bot.id}><div className="runtime-bot-identity"><BotAvatar bot={bot} className="runtime-bot-avatar" /><div><strong>{bot.name}</strong><BotUptime bot={bot} /></div></div><span className="runtime-bot-qq">{bot.qq}</span><StatusPill label={botStatusLabel(bot)} state={botStatusState(bot)} /><span className="runtime-table-value">{botTotal.toLocaleString()}</span><span className="runtime-table-value">{bot.port || '—'}</span><span className="runtime-table-value">{bot.framework_label || (bot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')}</span><div className="runtime-bot-row-actions"><button className="secondary runtime-view-button" onClick={() => onSelectBot(bot.id)}>查看账号</button><button className={`runtime-action ${running ? 'danger' : ''}`} onClick={() => action(bot, running ? 'stop' : 'start', running ? '停止' : '启动')} disabled={busy.startsWith(`${bot.id}:`) || transitioning}>{running ? <Square size={12} /> : <Play size={12} />}{transitioning ? botStatusLabel(bot) : running ? '停止' : '启动'}</button></div></div>})}</div>{pageCount > 1 && <div className="runtime-table-footer"><div className="runtime-pagination"><button className="plain-icon" onClick={() => setBotPage((page) => Math.max(1, page - 1))} disabled={botPage === 1} aria-label="上一页" title="上一页"><ChevronLeft size={15} /></button><span className="selected">{botPage}</span><button className="plain-icon" onClick={() => setBotPage((page) => Math.min(pageCount, page + 1))} disabled={botPage === pageCount} aria-label="下一页" title="下一页"><ChevronRight size={15} /></button></div><span>共 {bots.length} 条</span></div>}</> : <div className="runtime-empty"><Bot size={18} /><span>还没有可监控的 Bot</span></div>}</section>
+      <section className="runtime-section runtime-bots-section"><div className="runtime-section-heading"><div><h2>Bot 运行概况 <small>共 {bots.length} 个账号</small></h2></div></div>{bots.length ? <><div className="runtime-bot-table"><div className="runtime-bot-table-head"><span>Bot</span><span>QQ 号</span><span>状态</span><span>今日消息</span><span>OneBot 端口</span><span>机器人框架</span><span>操作</span></div>{visibleBots.map((bot) => { const running = isBotRunning(bot); const transitioning = isBotTransitioning(bot); const botTotal = Number(botStats.get(String(bot.id))?.total || 0); return <div className="runtime-bot-row" key={bot.id}><div className="runtime-bot-identity"><BotAvatar bot={bot} className="runtime-bot-avatar" /><div><strong>{bot.name}</strong><BotUptime bot={bot} /></div></div><span className="runtime-bot-qq">{bot.qq}</span><StatusPill label={botStatusLabel(bot)} state={botStatusState(bot)} /><span className="runtime-table-value">{botTotal.toLocaleString()}</span><span className="runtime-table-value">{bot.port || '—'}</span><span className="runtime-table-value">{bot.framework_label || (bot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')}</span><div className="runtime-bot-row-actions"><button className="secondary runtime-view-button" onClick={() => onSelectBot(bot.id)}>查看账号</button><button className={`runtime-action ${running ? 'danger' : ''}`} onClick={() => action(bot, running ? 'stop' : 'start', running ? '停止' : '启动')} disabled={busy.startsWith(`${bot.id}:`) || transitioning}>{running ? <Square size={12} /> : <Play size={12} />}{transitioning ? botStatusLabel(bot) : running ? '停止' : '启动'}</button></div></div>})}</div>{pageCount > 1 && <div className="runtime-table-footer"><div className="runtime-pagination"><button className="plain-icon" onClick={() => setBotPage((page) => Math.max(1, Math.min(pageCount, page) - 1))} disabled={currentBotPage === 1} aria-label="上一页" title="上一页"><ChevronLeft size={15} /></button><span className="selected">{currentBotPage}</span><button className="plain-icon" onClick={() => setBotPage((page) => Math.min(pageCount, Math.max(1, page) + 1))} disabled={currentBotPage === pageCount} aria-label="下一页" title="下一页"><ChevronRight size={15} /></button></div><span>共 {bots.length} 条</span></div>}</> : <div className="runtime-empty"><Bot size={18} /><span>还没有可监控的 Bot</span></div>}</section>
     </div>
 
     <section className="runtime-section runtime-services-section"><div className="runtime-section-heading"><div><h2>服务状态</h2></div></div><div className="runtime-service-cards"><div className="runtime-service-card"><div className="runtime-service-icon"><Server size={18} /></div><div><strong>NapCat</strong><span>{napcat.available ? 'QQ 协议端服务' : '尚未配置资源'}</span></div><StatusPill label={napcat.running > 0 ? '运行中' : '未启用'} state={napcat.running > 0 ? 'green' : 'muted'} /></div><div className="runtime-service-card"><div className="runtime-service-icon nonebot"><SquareTerminal size={18} /></div><div><strong>机器人框架</strong><span>{frameworkNames.length ? frameworkNames.join('、') : '等待账号配置'}</span></div><StatusPill label={runningBots.length ? '运行中' : '未启动'} state={runningBots.length ? 'green' : 'muted'} /></div><div className="runtime-service-card"><div className="runtime-service-icon onebot"><FileText size={18} /></div><div><strong>OneBot 端口</strong><span>{firstBot?.port ? `端口 ${firstBot.port} 可用` : '尚未配置端口'}</span></div><StatusPill label={firstBot?.port ? '正常' : '未配置'} state={firstBot?.port ? 'green' : 'muted'} /></div></div></section>
