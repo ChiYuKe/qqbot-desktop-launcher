@@ -18,6 +18,17 @@
       "created_at": "2026-07-16T14:31:24+08:00",
       "expires_at": null,
       "link": null
+    },
+    {
+      "id": "test-github-notification-20260716-02",
+      "title": "GitHub 通知测试三",
+      "body": "如果能看到这条消息，说明 GitHub 通知读取正常。",
+      "level": "success",
+      "created_at": "2026-07-16T23:18:24+08:00",
+      "expires_at": null,
+      "link": null
     }
+
+
   ]
 }
