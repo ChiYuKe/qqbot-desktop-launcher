@@ -23,7 +23,9 @@ admin/frontend/src/test/
 **/*.test.*
 
 # ===== 本地说明文件 =====
-README.md
+admin/README.md
+admin/desktop/README.md
+!README.md
 
 # ===== 运行时数据 =====
 data/
