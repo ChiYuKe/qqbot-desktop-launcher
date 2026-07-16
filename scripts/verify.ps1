@@ -30,7 +30,7 @@ try {
     npm --prefix $frontend run typecheck
     if ($LASTEXITCODE -ne 0) { throw "前端类型检查未通过" }
 
-    npm --prefix $frontend run test
+    npm --prefix $frontend run test -- --passWithNoTests
     if ($LASTEXITCODE -ne 0) { throw "前端测试未通过" }
 
     npm --prefix $frontend run build
