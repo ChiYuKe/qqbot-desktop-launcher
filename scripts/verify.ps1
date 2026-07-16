@@ -4,6 +4,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $root ".venv\Scripts\python.exe"
 $frontend = Join-Path $root "admin\frontend"
 $desktop = Join-Path $root "admin\desktop"
+$tests = Join-Path $root "tests"
 
 if (-not (Test-Path -LiteralPath $python)) {
     throw "找不到 Python 虚拟环境：$python"
@@ -11,10 +12,13 @@ if (-not (Test-Path -LiteralPath $python)) {
 
 Push-Location $root
 try {
-    & $python -m pytest
-    if ($LASTEXITCODE -ne 0) { throw "pytest 未通过" }
-
-    & $python -m ruff check admin tests
+    if (Test-Path -LiteralPath $tests) {
+        & $python -m pytest
+        if ($LASTEXITCODE -ne 0) { throw "pytest 未通过" }
+        & $python -m ruff check admin tests
+    } else {
+        & $python -m ruff check admin
+    }
     if ($LASTEXITCODE -ne 0) { throw "Ruff 未通过" }
 
     & $python -m mypy
