@@ -32,13 +32,17 @@ function resolveProjectRoot() {
   return candidates.find(candidate => fs.existsSync(path.join(candidate, 'admin', 'backend'))) || candidates[0]
 }
 
-const projectRoot = resolveProjectRoot()
-const adminRoot = path.join(projectRoot, 'admin')
-const panelDist = path.join(adminRoot, 'frontend', 'dist', 'index.html')
-const python = path.join(projectRoot, '.venv', 'Scripts', 'python.exe')
+const bundledBackend = path.join(process.resourcesPath, 'backend', 'qqbot-admin.exe')
+const bundledPanelDist = path.join(process.resourcesPath, 'panel', 'index.html')
+const bundledPython = path.join(process.resourcesPath, 'python-runtime', 'python.exe')
+const bundledRuntime = app.isPackaged && fs.existsSync(bundledBackend)
+const projectRoot = bundledRuntime ? null : resolveProjectRoot()
+const adminRoot = projectRoot ? path.join(projectRoot, 'admin') : null
+const panelDist = bundledRuntime ? bundledPanelDist : path.join(adminRoot || '', 'frontend', 'dist', 'index.html')
+const python = projectRoot ? path.join(projectRoot, '.venv', 'Scripts', 'python.exe') : null
 const iconCandidates = [
   path.join(__dirname, 'assets', 'icon.ico'),
-  path.join(adminRoot, 'desktop', 'assets', 'icon.ico'),
+  ...(adminRoot ? [path.join(adminRoot, 'desktop', 'assets', 'icon.ico')] : []),
 ]
 const iconPath = iconCandidates.find(candidate => fs.existsSync(candidate))
 let apiProcess
@@ -229,15 +233,32 @@ function apiStatus() {
 }
 
 async function startApi() {
-  if (!fs.existsSync(python)) throw new Error(`找不到项目虚拟环境：${python}`)
   const status = await apiStatus()
   if (status === 'current') return
   if (status === 'incompatible') throw new Error('6700 端口上的管理服务版本过旧，请先关闭旧管理服务后再启动桌面端')
-  apiProcess = spawn(python, [path.join(adminRoot, 'server.py')], {
-    cwd: adminRoot,
+  const runtimeRoot = bundledRuntime ? app.getPath('userData') : projectRoot
+  if (!runtimeRoot) throw new Error('找不到 QQBot 项目目录，请设置 QQ_BOT_ROOT')
+  fs.mkdirSync(runtimeRoot, { recursive: true })
+  const command = bundledRuntime ? bundledBackend : python
+  const args = bundledRuntime ? [] : [path.join(adminRoot || '', 'server.py')]
+  if (!command || !fs.existsSync(command)) {
+    throw new Error(
+      bundledRuntime
+        ? `找不到内置管理服务：${bundledBackend}\n请重新安装 QQBot Desktop Launcher。`
+        : `找不到项目虚拟环境：${command}`,
+    )
+  }
+  const environment = {
+    ...process.env,
+    QQ_CONSOLE_TOKEN: SESSION_TOKEN,
+    QQ_BOT_ROOT: runtimeRoot,
+  }
+  if (bundledRuntime && fs.existsSync(bundledPython)) environment.QQ_BOT_PYTHON = bundledPython
+  apiProcess = spawn(command, args, {
+    cwd: runtimeRoot,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, QQ_CONSOLE_TOKEN: SESSION_TOKEN },
+    env: environment,
   })
   apiPid = apiProcess.pid
   apiProcess.on('error', error => dialog.showErrorBox('管理服务启动失败', error.message))
@@ -285,7 +306,11 @@ function startApiMonitor() {
 }
 
 async function createWindow() {
-  if (!fs.existsSync(panelDist)) throw new Error('前端尚未构建，请先运行 npm run build:panel')
+  if (!fs.existsSync(panelDist)) {
+    throw new Error(
+      `找不到管理面板文件：${panelDist}\n\n请运行 release\\QQBot-Desktop-Launcher-Portable.exe，并保留项目中的 admin、.venv、data、program 目录；也可以设置 QQ_BOT_ROOT 指向项目根目录。`,
+    )
+  }
   await startApi()
   await waitForApi()
   mainWindow = new BrowserWindow({

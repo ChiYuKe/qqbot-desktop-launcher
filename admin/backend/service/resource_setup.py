@@ -5,6 +5,7 @@ import copy
 import hashlib
 import hmac
 import json
+import os
 import re
 import shutil
 import stat
@@ -62,6 +63,23 @@ MAX_ARCHIVE_BYTES = 1_000_000_000
 MAX_EXTRACTED_BYTES = 4_000_000_000
 MAX_ARCHIVE_MEMBERS = 20_000
 MAX_COMPRESSION_RATIO = 1_000
+
+
+def _python_executable() -> Path | None:
+    """Find a real Python interpreter for creating bot virtual environments."""
+    configured = os.getenv("QQ_BOT_PYTHON", "").strip()
+    candidates = [Path(configured)] if configured else []
+    current = Path(sys.executable)
+    if current.name.lower() in {"python.exe", "pythonw.exe", "python"}:
+        candidates.append(current)
+    for command in ("python", "python3"):
+        located = shutil.which(command)
+        if located:
+            candidates.append(Path(located))
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
 
 
 class SetupCancelled(RuntimeError):
@@ -337,11 +355,12 @@ class ResourceSetupManager:
         python = target / ".venv" / "Scripts" / "python.exe"
         if python.exists():
             return python
-        if sys.version_info < (3, 10):
-            raise RuntimeError("AstrBot 要求 Python 3.10 或更高版本")
+        runner = _python_executable()
+        if runner is None:
+            raise RuntimeError("未找到可用的 Python 3.10+，请安装 Python 或重启便携版以使用内置运行时")
         venv_dir = target / ".venv"
         self._update_step("astrbot", "python", "running", 30, "正在创建 AstrBot 虚拟环境…")
-        returncode, _, _ = self._run_process([sys.executable, "-m", "venv", str(venv_dir)], timeout=300)
+        returncode, _, _ = self._run_process([str(runner), "-m", "venv", str(venv_dir)], timeout=300)
         if returncode != 0 or not python.exists():
             raise RuntimeError("无法创建 AstrBot Python 虚拟环境")
         return python
@@ -848,11 +867,12 @@ class ResourceSetupManager:
             if returncode != 0 or (major, minor) < (3, 10):
                 raise RuntimeError("NoneBot CLI/项目要求 Python 3.10 或更高版本")
             return python
-        if sys.version_info < (3, 10):
-            raise RuntimeError("NoneBot CLI/项目要求 Python 3.10 或更高版本")
+        runner = _python_executable()
+        if runner is None:
+            raise RuntimeError("未找到可用的 Python 3.10+，请安装 Python 或重启便携版以使用内置运行时")
         venv_dir = runtime_config.ROOT / ".venv"
         self._update_step("nonebot", "python", "running", 30, "正在创建项目虚拟环境…")
-        returncode, _, _ = self._run_process([sys.executable, "-m", "venv", str(venv_dir)], timeout=300)
+        returncode, _, _ = self._run_process([str(runner), "-m", "venv", str(venv_dir)], timeout=300)
         if returncode != 0 or not python.exists():
             raise RuntimeError("无法创建 Python 虚拟环境，请先安装 Python 3.10-3.12")
         return python

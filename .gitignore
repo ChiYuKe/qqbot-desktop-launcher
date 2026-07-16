@@ -44,6 +44,9 @@ data/
 dist/
 build/
 release/
+admin/backend-dist/
+admin/backend-build/
+admin/desktop/runtime-python/
 
 # Vite 缓存
 .vite/

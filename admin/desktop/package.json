@@ -6,8 +6,9 @@
   "scripts": {
     "start": "npm run build:panel && electron .",
     "build:panel": "npm --prefix ../frontend run build",
+    "build:runtime": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../scripts/build-backend.ps1",
     "desktop": "npm run build:panel && electron .",
-    "dist:win": "npm run build:panel && electron-builder --win portable nsis",
+    "dist:win": "npm run build:panel && npm run build:runtime && electron-builder --win portable nsis",
     "check": "node --check main.cjs && node --check preload.cjs",
     "test": "node --test tests/*.test.cjs"
   },
@@ -22,6 +23,20 @@
       "preload.cjs",
       "package.json",
       "assets/icon.ico"
+    ],
+    "extraResources": [
+      {
+        "from": "../frontend/dist",
+        "to": "panel"
+      },
+      {
+        "from": "../backend-dist",
+        "to": "backend"
+      },
+      {
+        "from": "runtime-python",
+        "to": "python-runtime"
+      }
     ],
     "win": {
       "target": ["portable", "nsis"],

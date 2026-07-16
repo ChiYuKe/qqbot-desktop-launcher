@@ -13,7 +13,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(
+    os.getenv("QQ_BOT_ROOT", str(Path(__file__).resolve().parents[2]))
+).expanduser().resolve()
 PROGRAM_DIR = ROOT / "program"
 NONEBOT_DIR = PROGRAM_DIR / "NoneBot"
 ASTRBOT_DIR = PROGRAM_DIR / "AstrBot"
