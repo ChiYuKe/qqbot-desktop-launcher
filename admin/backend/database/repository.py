@@ -4,8 +4,9 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Iterator
 
+from backend.database.migrations import apply_migration
 from backend.domain.models import BotConfig
 
 
@@ -55,26 +56,30 @@ class BotRepository:
 
     def _initialize(self) -> None:
         with self._connection() as connection:
-            connection.executescript(SCHEMA)
-            columns = {row["name"] for row in connection.execute("PRAGMA table_info(bots)").fetchall()}
-            if "password_secret" not in columns:
-                connection.execute("ALTER TABLE bots ADD COLUMN password_secret TEXT NOT NULL DEFAULT ''")
-            if "napcat_port" not in columns:
-                connection.execute("ALTER TABLE bots ADD COLUMN napcat_port INTEGER NOT NULL DEFAULT 6099")
-            if "framework" not in columns:
-                connection.execute("ALTER TABLE bots ADD COLUMN framework TEXT NOT NULL DEFAULT 'nonebot'")
-            rows = connection.execute("SELECT id, napcat_port FROM bots ORDER BY created_at, id").fetchall()
-            used: set[int] = set()
-            next_port = 6099
-            for row in rows:
-                port = int(row["napcat_port"] or 0)
-                if port < 1024 or port in used:
-                    while next_port in used:
-                        next_port += 1
-                    port = next_port
-                    connection.execute("UPDATE bots SET napcat_port = ? WHERE id = ?", (port, row["id"]))
-                used.add(port)
-                next_port = max(next_port, port + 1)
+            apply_migration(connection, self.database_file, "0001-bot-schema-v1", self._migrate_schema)
+
+    @staticmethod
+    def _migrate_schema(connection: sqlite3.Connection) -> None:
+        connection.executescript(SCHEMA)
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(bots)").fetchall()}
+        if "password_secret" not in columns:
+            connection.execute("ALTER TABLE bots ADD COLUMN password_secret TEXT NOT NULL DEFAULT ''")
+        if "napcat_port" not in columns:
+            connection.execute("ALTER TABLE bots ADD COLUMN napcat_port INTEGER NOT NULL DEFAULT 6099")
+        if "framework" not in columns:
+            connection.execute("ALTER TABLE bots ADD COLUMN framework TEXT NOT NULL DEFAULT 'nonebot'")
+        rows = connection.execute("SELECT id, napcat_port FROM bots ORDER BY created_at, id").fetchall()
+        used: set[int] = set()
+        next_port = 6099
+        for row in rows:
+            port = int(row["napcat_port"] or 0)
+            if port < 1024 or port in used:
+                while next_port in used:
+                    next_port += 1
+                port = next_port
+                connection.execute("UPDATE bots SET napcat_port = ? WHERE id = ?", (port, row["id"]))
+            used.add(port)
+            next_port = max(next_port, port + 1)
 
     def _migrate_legacy_json(self) -> None:
         with self._connection() as connection:

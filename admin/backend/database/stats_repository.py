@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Iterator, Iterable
+from typing import Any, Iterable, Iterator
+
+from backend.database.migrations import apply_migration
+
+
+_PROCESS_LOG_TIMESTAMP_RE = re.compile(
+    r"^(?P<month_day>\d{2}-\d{2})\s+(?P<clock>\d{2}:\d{2}:\d{2})\s+"
+)
 
 
 SCHEMA = """
@@ -32,7 +39,8 @@ CREATE TABLE IF NOT EXISTS message_stats_events (
     bot_id TEXT NOT NULL,
     day TEXT NOT NULL,
     direction TEXT NOT NULL,
-    message_type TEXT NOT NULL
+    message_type TEXT NOT NULL,
+    occurred_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_message_stats_events_bot_day ON message_stats_events(bot_id, day);
 """
@@ -45,7 +53,21 @@ class MessageStatsRepository:
         self.database_file = database_file
         self.database_file.parent.mkdir(parents=True, exist_ok=True)
         with self._connection() as connection:
-            connection.executescript(SCHEMA)
+            apply_migration(connection, self.database_file, "0002-message-stats-v1", self._migrate_schema)
+
+    @staticmethod
+    def _migrate_schema(connection: sqlite3.Connection) -> None:
+        connection.executescript(SCHEMA)
+        columns = {
+            str(row["name"])
+            for row in connection.execute("PRAGMA table_info(message_stats_events)").fetchall()
+        }
+        if "occurred_at" not in columns:
+            connection.execute("ALTER TABLE message_stats_events ADD COLUMN occurred_at TEXT")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_message_stats_events_day_time "
+            "ON message_stats_events(day, occurred_at)"
+        )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_file, timeout=10)
@@ -78,15 +100,22 @@ class MessageStatsRepository:
         occurred_at: datetime | None = None,
         event_key: str | None = None,
     ) -> bool:
-        day = (occurred_at or datetime.now()).date().isoformat()
+        occurred = occurred_at or datetime.now()
+        day = occurred.date().isoformat()
+        occurred_value = occurred.isoformat(timespec="seconds")
         with self._connection() as connection:
             if event_key:
                 inserted = connection.execute(
                     "INSERT OR IGNORE INTO message_stats_events "
-                    "(event_key, bot_id, day, direction, message_type) VALUES (?, ?, ?, ?, ?)",
-                    (event_key, bot_id, day, direction, message_type),
+                    "(event_key, bot_id, day, direction, message_type, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (event_key, bot_id, day, direction, message_type, occurred_value),
                 ).rowcount
                 if not inserted:
+                    connection.execute(
+                        "UPDATE message_stats_events SET occurred_at = ? "
+                        "WHERE event_key = ? AND (occurred_at IS NULL OR occurred_at = '')",
+                        (occurred_value, event_key),
+                    )
                     return False
             self._upsert_daily(connection, bot_id, day, direction, message_type)
         return True
@@ -161,35 +190,80 @@ class MessageStatsRepository:
             return "sent", _message_type(plain)
         return None, "unknown"
 
-    def _event_rows(self, event_file: Path, bots: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-        source_to_id = {str(bot.get("name")): str(bot.get("id")) for bot in bots}
+    def _event_rows(
+        self,
+        event_file: Path,
+        bots: Iterable[dict[str, Any]],
+        process_log_dir: Path | None = None,
+    ) -> list[dict[str, Any]]:
+        bot_list = list(bots)
+        source_to_id = {str(bot.get("name")): str(bot.get("id")) for bot in bot_list}
         rows: list[dict[str, Any]] = []
-        if not event_file.exists():
+        if event_file.exists():
+            try:
+                with event_file.open("r", encoding="utf-8") as stream:
+                    for raw in stream:
+                        try:
+                            event = json.loads(raw)
+                        except (TypeError, ValueError):
+                            continue
+                        if not isinstance(event, dict):
+                            continue
+                        bot_id = source_to_id.get(str(event.get("source", "")))
+                        if not bot_id:
+                            continue
+                        message = str(event.get("message", ""))
+                        direction, message_type = self._direction_and_type(message)
+                        if direction is None:
+                            continue
+                        occurred_at = self._parse_timestamp(event)
+                        day = (occurred_at or datetime.now()).date().isoformat()
+                        rows.append({
+                            "key": self.event_key(event),
+                            "bot_id": bot_id,
+                            "day": day,
+                            "direction": direction,
+                            "message_type": message_type,
+                            "occurred_at": occurred_at.isoformat(timespec="seconds") if occurred_at else None,
+                        })
+            except (OSError, UnicodeError):
+                pass
+
+        # AstrBot's own console uses ``core.event_bus`` lines without a
+        # direction marker. NapCat still writes the canonical directional
+        # line, so use that source only for AstrBot accounts. NoneBot keeps
+        # using its framework event records to avoid counting the same event
+        # twice.
+        if process_log_dir is not None:
+            for bot in bot_list:
+                if str(bot.get("framework", "nonebot")).lower() != "astrbot":
+                    continue
+                bot_id = str(bot.get("id", ""))
+                bot_name = str(bot.get("name", ""))
+                if not bot_id:
+                    continue
+                rows.extend(self._process_log_rows(process_log_dir / f"{bot_id}.napcat.log", bot_id, bot_name))
+        return rows
+
+    def _process_log_rows(self, log_file: Path, bot_id: str, bot_name: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        if not log_file.exists():
             return rows
         try:
-            with event_file.open("r", encoding="utf-8") as stream:
+            with log_file.open("r", encoding="utf-8", errors="replace") as stream:
                 for raw in stream:
-                    try:
-                        event = json.loads(raw)
-                    except (TypeError, ValueError):
-                        continue
-                    if not isinstance(event, dict):
-                        continue
-                    bot_id = source_to_id.get(str(event.get("source", "")))
-                    if not bot_id:
-                        continue
-                    message = str(event.get("message", ""))
+                    message = raw.rstrip("\r\n")
                     direction, message_type = self._direction_and_type(message)
                     if direction is None:
                         continue
-                    occurred_at = self._parse_timestamp(event)
-                    day = (occurred_at or datetime.now()).date().isoformat()
+                    occurred_at = parse_process_log_timestamp(message)
                     rows.append({
-                        "key": self.event_key(event),
+                        "key": self.event_key({"source": bot_name, "message": message}),
                         "bot_id": bot_id,
-                        "day": day,
+                        "day": (occurred_at or datetime.now()).date().isoformat(),
                         "direction": direction,
                         "message_type": message_type,
+                        "occurred_at": occurred_at.isoformat(timespec="seconds") if occurred_at else None,
                     })
         except (OSError, UnicodeError):
             return []
@@ -198,10 +272,16 @@ class MessageStatsRepository:
     def _insert_event(self, connection: sqlite3.Connection, row: dict[str, Any], count_daily: bool) -> bool:
         inserted = connection.execute(
             "INSERT OR IGNORE INTO message_stats_events "
-            "(event_key, bot_id, day, direction, message_type) VALUES (?, ?, ?, ?, ?)",
-            (row["key"], row["bot_id"], row["day"], row["direction"], row["message_type"]),
+            "(event_key, bot_id, day, direction, message_type, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (row["key"], row["bot_id"], row["day"], row["direction"], row["message_type"], row.get("occurred_at")),
         ).rowcount
         if not inserted:
+            if row.get("occurred_at"):
+                connection.execute(
+                    "UPDATE message_stats_events SET occurred_at = ? "
+                    "WHERE event_key = ? AND (occurred_at IS NULL OR occurred_at = '')",
+                    (row["occurred_at"], row["key"]),
+                )
             return False
         if count_daily:
             self._upsert_daily(connection, row["bot_id"], row["day"], row["direction"], row["message_type"])
@@ -221,9 +301,14 @@ class MessageStatsRepository:
             return False
         return self.record(bot_id, direction, message_type, occurred_at, event_key)
 
-    def backfill_events(self, event_file: Path, bots: Iterable[dict[str, Any]]) -> int:
+    def backfill_events(
+        self,
+        event_file: Path,
+        bots: Iterable[dict[str, Any]],
+        process_log_dir: Path | None = None,
+    ) -> int:
         """Incrementally import event history without double counting on restart."""
-        rows = self._event_rows(event_file, bots)
+        rows = self._event_rows(event_file, bots, process_log_dir)
         imported = 0
         with self._connection() as connection:
             marker = connection.execute(
@@ -283,6 +368,64 @@ class MessageStatsRepository:
             ).fetchall()
 
     @staticmethod
+    def _empty_intraday_series() -> list[dict[str, Any]]:
+        return [
+            {
+                "time": f"{hour:02d}:00",
+                "received": 0,
+                "sent": 0,
+                "total": 0,
+                "groups": 0,
+                "private": 0,
+                "media": 0,
+                "commands": 0,
+                "last_at": None,
+            }
+            for hour in range(24)
+        ]
+
+    def _intraday_by_day(self, start: date, end: date) -> dict[str, list[dict[str, Any]]]:
+        """Aggregate timestamped events into hourly buckets for each day."""
+        buckets_by_day = {
+            (start + timedelta(days=offset)).isoformat(): self._empty_intraday_series()
+            for offset in range((end - start).days + 1)
+        }
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT day, occurred_at, direction, message_type FROM message_stats_events "
+                "WHERE day >= ? AND day <= ? AND occurred_at IS NOT NULL AND occurred_at != '' "
+                "ORDER BY day, occurred_at",
+                (start.isoformat(), end.isoformat()),
+            ).fetchall()
+        for row in rows:
+            day_key = str(row["day"] or "")
+            buckets = buckets_by_day.get(day_key)
+            if buckets is None:
+                continue
+            try:
+                occurred_at = datetime.fromisoformat(str(row["occurred_at"]))
+            except (TypeError, ValueError):
+                continue
+            if occurred_at.date().isoformat() != day_key or not 0 <= occurred_at.hour < len(buckets):
+                continue
+            bucket = buckets[occurred_at.hour]
+            direction = str(row["direction"] or "")
+            message_type = str(row["message_type"] or "")
+            if direction in {"received", "sent"}:
+                bucket[direction] += 1
+                bucket["total"] += 1
+            if message_type in {"group", "group_media"}:
+                bucket["groups"] += 1
+            if message_type in {"private", "private_media"}:
+                bucket["private"] += 1
+            if "media" in message_type:
+                bucket["media"] += 1
+            if message_type == "command":
+                bucket["commands"] += 1
+            bucket["last_at"] = occurred_at.strftime("%H:%M")
+        return buckets_by_day
+
+    @staticmethod
     def _totals(rows: Iterable[sqlite3.Row]) -> dict[str, int]:
         result = {"received": 0, "sent": 0, "total": 0, "groups": 0, "private": 0, "media": 0, "commands": 0, "active_days": 0}
         days: set[str] = set()
@@ -322,7 +465,29 @@ class MessageStatsRepository:
             values = self._totals(grouped_days.get(current.isoformat(), []))
             values["day"] = current.isoformat()
             series.append(values)
-        return {"periods": periods, "bots": bot_periods, "series": series, "updated_at": datetime.now().isoformat(timespec="seconds")}
+        intraday_by_day = self._intraday_by_day(series_start, today)
+        today_intraday = intraday_by_day.get(today.isoformat(), self._empty_intraday_series())
+        return {
+            "periods": periods,
+            "bots": bot_periods,
+            "series": series,
+            "intraday": today_intraday,
+            "intraday_by_day": intraday_by_day,
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+
+
+def parse_process_log_timestamp(value: str) -> datetime | None:
+    match = _PROCESS_LOG_TIMESTAMP_RE.search(_strip_ansi(value))
+    if not match:
+        return None
+    try:
+        return datetime.strptime(
+            f"{datetime.now().year}-{match.group('month_day')} {match.group('clock')}",
+            "%Y-%m-%d %H:%M:%S",
+        )
+    except ValueError:
+        return None
 
 
 def _strip_ansi(value: str) -> str:

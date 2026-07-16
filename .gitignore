@@ -17,11 +17,16 @@ __pycache__/
 coverage.xml
 htmlcov/
 
+# ===== 测试文件 =====
+tests/
+admin/frontend/src/test/
+**/*.test.*
+
+# ===== 本地说明文件 =====
+README.md
+
 # ===== 运行时数据 =====
 data/
-
-# ===== 本地测试文件 =====
-tests/
 
 # SQLite 运行时文件
 *.db

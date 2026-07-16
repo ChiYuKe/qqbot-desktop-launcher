@@ -7,7 +7,9 @@
     "start": "npm run build:panel && electron .",
     "build:panel": "npm --prefix ../frontend run build",
     "desktop": "npm run build:panel && electron .",
-    "dist:win": "npm run build:panel && electron-builder --win portable"
+    "dist:win": "npm run build:panel && electron-builder --win portable nsis",
+    "check": "node --check main.cjs && node --check preload.cjs",
+    "test": "node --test tests/*.test.cjs"
   },
   "build": {
     "appId": "com.qqbot.desktop.launcher",
@@ -22,9 +24,16 @@
       "assets/icon.ico"
     ],
     "win": {
-      "target": "portable",
-      "artifactName": "QQBot-Desktop-Launcher.exe",
+      "target": ["portable", "nsis"],
       "icon": "assets/icon.ico"
+    },
+    "portable": {
+      "artifactName": "QQBot-Desktop-Launcher-Portable.exe"
+    },
+    "nsis": {
+      "artifactName": "QQBot-Desktop-Launcher-Setup.exe",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   },
   "devDependencies": {

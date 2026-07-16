@@ -25,6 +25,8 @@ body {
 
 .topbar-brand-wrap { position: relative; align-self: stretch; display: flex; align-items: center; -webkit-app-region: drag; }
 .topbar-brand { height: 100%; gap: 11px; padding: 0 8px; font-size: 19px; }
+.topbar-action { position: relative; }
+.notification-dot { position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; display: block; border-radius: 50%; }
 .webui-switcher { position: absolute; top: calc(100% + 6px); left: 0; z-index: 30; width: 240px; }
 .webui-switcher-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 12px 13px 9px; }
 .webui-switcher-item { width: 100%; min-height: 52px; display: flex; align-items: center; gap: 9px; padding: 7px 12px; text-align: left; }
@@ -32,6 +34,17 @@ body {
 .webui-switcher-item > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; flex: 1; }
 .webui-switcher-item > svg { flex: none; }
 .webui-switcher-empty { padding: 9px 13px 13px; }
+.notification-modal { width: min(480px, calc(100vw - 36px)); max-height: min(620px, calc(100vh - 48px)); display: flex; flex-direction: column; overflow: hidden; padding: 22px; }
+.notification-modal-header { flex: none; margin-bottom: 16px; }
+.notification-list { min-height: 0; display: grid; gap: 8px; overflow: auto; padding-right: 2px; }
+.notification-item { padding: 11px 12px; border-radius: 9px; }
+.notification-item-heading { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.notification-item-heading strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notification-item-heading time { flex: none; margin-left: auto; }
+.notification-item p { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.notification-item a { display: inline-flex; align-items: center; gap: 5px; margin-top: 9px; }
+.notification-source { display: block; margin-top: 8px; }
+.notification-empty { min-height: 210px; display: grid; place-items: center; align-content: center; gap: 8px; text-align: center; }
 .topbar-actions { gap: 12px; }
 .service-pill { gap: 5px; padding: 6px 10px; font-size: 11px; }
 
@@ -68,7 +81,7 @@ body {
 .app-body.settings-mode > .sidebar { display: none; }
 .settings-shell { grid-template-columns: 272px minmax(0, 1fr); }
 .settings-main { overflow: auto; }
-.settings-content { width: min(900px, 100%); padding: 58px 70px 80px; }
+.settings-content { width: min(900px, 100%); margin-inline: auto; padding: 58px 70px 80px; }
 .settings-search { height: 32px; margin: 11px 0 18px; }
 .settings-nav-item { height: 31px; }
 
@@ -449,4 +462,15 @@ body {
   .config-card { padding: 12px; }
   .config-card-title { align-items: flex-start; flex-wrap: wrap; }
   .config-actions { justify-content: flex-start; }
+}
+
+@media (max-width: 1100px) {
+  .overview-page { padding: 24px 24px 30px; }
+  .overview-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .overview-page-header { flex-direction: column; gap: 14px; }
+  .overview-grid { grid-template-columns: minmax(0, 1fr); }
+  .overview-header-actions { width: 100%; justify-content: space-between; }
 }

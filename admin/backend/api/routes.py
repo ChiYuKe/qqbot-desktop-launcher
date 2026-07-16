@@ -16,8 +16,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
+from backend.api.contracts import DiagnosticsResponse, HealthResponse, SessionResponse, WebSocketTicketResponse
 from backend.domain.errors import DomainError
 from backend.security.session import create_websocket_ticket
+from backend.service.diagnostics import collect_diagnostics
 import backend.config as runtime_config
 
 
@@ -74,25 +76,35 @@ def service(request: Request):
     return request.app.state.bot_service
 
 
-@router.get("/health")
-async def health() -> dict[str, Any]:
-    return {
-        "ok": True,
-        "api_version": API_PROTOCOL_VERSION,
-        "cpu": psutil.cpu_percent(interval=None),
-        "memory": psutil.virtual_memory().percent,
-    }
+@router.get("/health", response_model=HealthResponse)
+async def health() -> HealthResponse:
+    return HealthResponse(
+        ok=True,
+        api_version=API_PROTOCOL_VERSION,
+        cpu=psutil.cpu_percent(interval=None),
+        memory=psutil.virtual_memory().percent,
+    )
 
 
-@router.get("/session")
-async def session_status() -> dict[str, bool]:
+@router.get("/session", response_model=SessionResponse)
+async def session_status() -> SessionResponse:
     """Cheap authenticated probe used by the desktop supervisor."""
-    return {"ok": True}
+    return SessionResponse(ok=True)
 
 
-@router.post("/ws/ticket")
-async def websocket_ticket() -> dict[str, str]:
-    return {"ticket": create_websocket_ticket()}
+@router.post("/ws/ticket", response_model=WebSocketTicketResponse)
+async def websocket_ticket() -> WebSocketTicketResponse:
+    return WebSocketTicketResponse(ticket=create_websocket_ticket())
+
+
+@router.get("/diagnostics", response_model=DiagnosticsResponse)
+async def diagnostics(request: Request) -> DiagnosticsResponse:
+    payload = await asyncio.to_thread(
+        collect_diagnostics,
+        request.app.state.repository,
+        request.app.state.bot_manager,
+    )
+    return DiagnosticsResponse.model_validate(payload)
 
 
 @router.get("/napcat")

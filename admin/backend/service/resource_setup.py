@@ -412,7 +412,7 @@ class ResourceSetupManager:
                 self._update_step("napcat", "installer", "running", 80, "OneKey 安装器下载 QQ 失败，正在切换官方 Shell 版…")
                 shutil.rmtree(extract_dir, ignore_errors=True)
                 extract_dir.mkdir(parents=True)
-                package_root = self._download_shell_fallback(shell_asset, staging_root, extract_dir)
+                self._download_shell_fallback(shell_asset, staging_root, extract_dir)
                 shell_fallback = True
                 self._update_step("napcat", "installer", "succeeded", 100, "OneKey 安装器下载 QQ 失败，已切换官方 Shell 版。")
             if not shell_fallback:

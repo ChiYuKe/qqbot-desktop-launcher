@@ -4,35 +4,55 @@ import {
   Activity, ArrowLeft, Bell, Bot, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, CircleUserRound, Cpu,
   Copy, Database, Download, Eye, EyeOff, ExternalLink, FileText, FolderOpen, Gauge, Image as ImageIcon, Keyboard, LayoutDashboard, MessageSquare, Monitor, Moon, MoreHorizontal, Palette, Pause, Play,
   Maximize2, Minimize2, Plus, Power, Puzzle, RefreshCw, RotateCcw, Search, Server,
-  Settings, Square, SquareTerminal, Star, Sun, Trash2, UserRound, Users, Wifi, X,
+  Paintbrush, Settings, ShieldCheck, SlidersHorizontal, Square, SquareTerminal, Star, Sun, Trash2, UserRound, Users, Volume2, Wifi, X,
 } from 'lucide-react'
 import './styles.css'
 import './layout.css'
+import './theme-packages/blue.css'
+import { api, dashboardApi, DASHBOARD_POLL_INTERVAL_MS, downloadAuthenticatedFile, fetchAuthenticatedBlob } from './lib/api.js'
+import {
+  astrbotDashboardPort,
+  botStatusLabel,
+  botStatusState,
+  EMPTY_PLUGIN_FRAMEWORKS,
+  isBotRunning,
+  isBotTransitioning,
+  normalizePluginFrameworks,
+  openExternal,
+  webUiTarget,
+} from './lib/bot.js'
+import {
+  findLoginVerification,
+  isCurrentSessionLog,
+  mergeCurrentSessionLogs,
+  normalizeLogLevel,
+  orderCurrentSessionLogs,
+  parseLogSegments,
+  prepareLogItems,
+  resolveQuickLoginCommand,
+} from './lib/logs.js'
+import { deriveStatsFromLogs } from './lib/stats.js'
+import { DEFAULT_THEME_PACKAGE, getThemePackage, THEME_PACKAGES } from './theme-packages/index.js'
 
-const API_BASE = `http://${window.location.hostname || '127.0.0.1'}:6700`
-
-function apiToken() {
-  return window.desktopInfo?.apiToken || import.meta.env.VITE_QQ_CONSOLE_TOKEN || ''
-}
 const fallbackBots = []
 const fallbackLogs = []
-const fallbackStats = { periods: {}, bots: {}, series: [], updated_at: null }
-const EMPTY_PLUGIN_FRAMEWORKS = {
-  nonebot: { project: null, plugins: [] },
-  astrbot: { projects: [], plugins: [] },
-}
+const fallbackStats = { periods: {}, bots: {}, series: [], intraday: [], intraday_by_day: {}, updated_at: null }
 const FAVORITES_STORAGE_KEY = 'qq-console-favorites'
+const NOTIFICATION_STORAGE_KEY = 'qq-console-github-notifications'
+const PREFERENCES_STORAGE_KEY = 'qq-console-preferences'
+const FONT_STORAGE_KEY = 'qq-console-font'
+const THEME_PACKAGE_STORAGE_KEY = 'qq-console-theme-package'
+const NOTIFICATION_POLL_INTERVAL_MS = 60_000
+const NOTIFICATION_MAX_ITEMS = 50
+const NOTIFICATION_LEVELS = new Set(['info', 'success', 'warning', 'error'])
+const NOTIFICATION_FEED_URL = String(import.meta.env.VITE_GITHUB_NOTIFICATION_URL || 'https://raw.githubusercontent.com/ChiYuKe/qqbot-desktop-launcher/master/notifications.json').trim()
+const NOTIFICATION_SOURCE = 'GitHub'
 const OFFICIAL_RESOURCE_URLS = {
   napcat: 'https://github.com/NapNeko/NapCatQQ/releases',
   nonebot: 'https://nonebot.dev/docs/quick-start',
   astrbot: 'https://docs.astrbot.app/deploy/astrbot/cli.html',
 }
-const BOT_RUNNING_STATES = new Set(['running', 'login_required'])
-const BOT_TRANSITION_STATES = new Set(['starting', 'stopping', 'restarting', 'logging_in'])
 const RESOURCE_SETUP_POLL_INTERVAL_MS = 750
-const DASHBOARD_POLL_INTERVAL_MS = 10000
-const DASHBOARD_REQUEST_TIMEOUT_MS = 8000
-const LOG_SESSION_STARTED_AT = Math.floor(Date.now() / 1000) * 1000
 const favoritePageDefinitions = [
   { key: 'page:概览', label: '概览', icon: LayoutDashboard },
   { key: 'page:QQ 账号', label: 'QQ 账号', icon: UserRound },
@@ -43,261 +63,99 @@ const favoritePageDefinitions = [
   { key: 'page:NoneBot', label: 'NoneBot', icon: SquareTerminal },
   { key: 'page:AstrBot', label: 'AstrBot', icon: Bot },
 ]
-
-function normalizePluginFrameworks(data) {
-  const frameworks = data?.frameworks || {}
-  const nonebot = frameworks.nonebot || { project: data?.project || null, plugins: data?.plugins || [] }
-  const astrbot = frameworks.astrbot || { projects: [], plugins: [] }
-  return {
-    nonebot: { project: nonebot.project || null, plugins: Array.isArray(nonebot.plugins) ? nonebot.plugins : [] },
-    astrbot: {
-      projects: Array.isArray(astrbot.projects) ? astrbot.projects : [],
-      plugins: Array.isArray(astrbot.plugins) ? astrbot.plugins : [],
-    },
-  }
+const SECONDARY_PAGE_NAMES = new Set(['系统设置', 'NapCat', 'NoneBot', 'AstrBot'])
+const FONT_OPTIONS = [
+  { value: 'system', label: '系统默认', description: 'HarmonyOS Sans SC', family: '"HarmonyOS Sans SC", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", sans-serif' },
+  { value: 'microsoft', label: '微软雅黑', description: 'Windows 中文默认风格', family: '"Microsoft YaHei UI", "Microsoft YaHei", sans-serif' },
+  { value: 'segoe', label: 'Segoe UI', description: '偏英文和数字阅读', family: '"Segoe UI Variable Text", "Segoe UI", sans-serif' },
+]
+const SETTINGS_SECTIONS = [
+  { title: '个人', items: [{ label: '常规', icon: SlidersHorizontal }, { label: '个人资料', icon: CircleUserRound }, { label: '外观', icon: Palette }, { label: '快捷键', icon: Keyboard }] },
+  { title: '应用', items: [{ label: '通知', icon: Volume2 }, { label: '服务', icon: ShieldCheck }, { label: '主题插件包', icon: Paintbrush }] },
+]
+const DEFAULT_PREFERENCES = {
+  autoRefresh: true,
+  notificationsEnabled: true,
+  reduceMotion: false,
+  density: 'comfortable',
+  profileName: '管理员',
+  notificationSound: false,
 }
 
-function isBotRunning(bot) {
-  return BOT_RUNNING_STATES.has(bot?.status)
-}
-
-function isBotTransitioning(bot) {
-  return BOT_TRANSITION_STATES.has(bot?.status)
-}
-
-function botStatusLabel(bot) {
-  return {
-    running: '运行中',
-    login_required: '需要验证',
-    starting: '启动中',
-    stopping: '停止中',
-    restarting: '重启中',
-    logging_in: '登录中',
-    error: '异常',
-    stopped: '已停止',
-  }[bot?.status] || '已停止'
-}
-
-function botStatusState(bot) {
-  if (bot?.status === 'error' || bot?.status === 'login_required') return 'red'
-  if (isBotRunning(bot)) return 'green'
-  if (isBotTransitioning(bot)) return 'blue'
-  return 'muted'
-}
-
-function normalizeLocalUrl(value) {
-  if (!value) return value
+function readPreferences() {
   try {
-    const url = new URL(value)
-    if (url.protocol === 'http:' && ['[::]', '[::1]', '0.0.0.0'].includes(url.hostname)) {
-      url.hostname = '127.0.0.1'
-    }
-    return url.toString()
+    const saved = window.localStorage.getItem(PREFERENCES_STORAGE_KEY)
+    const parsed = saved ? JSON.parse(saved) : {}
+    return { ...DEFAULT_PREFERENCES, ...(parsed && typeof parsed === 'object' ? parsed : {}) }
   } catch {
-    return value
+    return { ...DEFAULT_PREFERENCES }
   }
 }
 
-function astrbotDashboardPort(napcatPort) {
-  const port = Number(napcatPort)
-  const candidate = port + 10000
-  return candidate <= 65535 ? candidate : Math.max(1024, port - 1000)
-}
-
-function webUiTarget(bot, kind) {
-  if (!bot) return null
-  if (kind === 'napcat') {
-    return { url: `http://127.0.0.1:${bot.napcat_port || 6099}`, title: `NapCat WebUI · ${bot.name}` }
-  }
-  if (kind === 'astrbot' && bot.framework === 'astrbot') {
-    return { url: `http://127.0.0.1:${astrbotDashboardPort(bot.napcat_port || 6099)}`, title: `AstrBot WebUI · ${bot.name}` }
-  }
-  return null
-}
-
-function openExternal(url) {
-  const normalizedUrl = normalizeLocalUrl(url)
-  if (!normalizedUrl) return
-  if (window.externalLinks?.open) {
-    window.externalLinks.open(normalizedUrl)
-    return
-  }
-  window.open(normalizedUrl, '_blank', 'noopener,noreferrer')
-}
-
-function orderLogs(logs) {
-  return Array.isArray(logs) ? [...logs].reverse().slice(-500) : []
-}
-
-function logIdentity(log) {
-  const id = String(log?.id || '').trim()
-  if (id) return `id:${id}`
-  return `legacy:${log?.timestamp || ''}|${log?.time || ''}|${log?.source || ''}|${log?.level || ''}|${log?.message || ''}`
-}
-
-function mergeCurrentSessionLogs(current, incoming) {
-  const events = new Map()
-  for (const log of [...(Array.isArray(current) ? current : []), ...(Array.isArray(incoming) ? incoming : [])]) {
-    if (!isCurrentSessionLog(log)) continue
-    events.set(logIdentity(log), log)
-  }
-  return [...events.values()].sort((left, right) => {
-    const leftTime = Date.parse(String(left?.timestamp || ''))
-    const rightTime = Date.parse(String(right?.timestamp || ''))
-    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) return leftTime - rightTime
-    return 0
-  }).slice(-500)
-}
-
-function isCurrentSessionLog(log) {
-  const timestamp = Date.parse(String(log?.timestamp || ''))
-  return Number.isFinite(timestamp) && timestamp >= LOG_SESSION_STARTED_AT
-}
-
-function orderCurrentSessionLogs(logs) {
-  const sessionLogs = (Array.isArray(logs) ? logs : []).filter(isCurrentSessionLog)
-  const unique = new Map()
-  sessionLogs.forEach((log) => unique.set(logIdentity(log), log))
-  return orderLogs([...unique.values()])
-}
-
-function statsLocalDay(value) {
-  const date = value instanceof Date ? value : new Date(value || Date.now())
-  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10)
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-}
-
-function statsShiftDay(day, offset) {
-  const date = new Date(`${day}T00:00:00`)
-  date.setDate(date.getDate() + offset)
-  return statsLocalDay(date)
-}
-
-function classifyStatsLog(message) {
+function normalizeNotification(item) {
+  if (!item || !String(item.id || '').trim() || !String(item.title || '').trim() || !String(item.body || '').trim()) return null
+  const level = String(item.level || 'info').toLowerCase()
   return {
-    group: /(群聊|群组|message\.group)/i.test(message),
-    private: /(私聊|好友|message\.private)/i.test(message),
-    media: /(图片|视频|文件|表情|\[image:|\[video:|\[file:)/i.test(message),
+    id: String(item.id).trim(),
+    title: String(item.title).trim(),
+    body: String(item.body).trim(),
+    level: NOTIFICATION_LEVELS.has(level) ? level : 'info',
+    created_at: String(item.created_at || ''),
+    expires_at: item.expires_at ? String(item.expires_at) : '',
+    link: item.link ? String(item.link).trim() : '',
+    read: Boolean(item.read),
   }
 }
 
-// Fallback used only while the management API is unavailable. The database
-// stats endpoint is authoritative once it responds; display logs are capped
-// and therefore cannot be the source of truth for historical totals.
-function deriveStatsFromLogs(logs, bots) {
-  const botMap = new Map((Array.isArray(bots) ? bots : []).map((bot) => [String(bot.name), bot]))
-  const rows = new Map()
-  for (const log of Array.isArray(logs) ? logs : []) {
-    const message = cleanLogMessage(log?.message || '')
-    const direction = /接收\s*<-/.test(message) ? 'received' : /发送\s*->/.test(message) ? 'sent' : null
-    if (!direction) continue
-    const bot = botMap.get(String(log?.source || ''))
-    if (!bot) continue
-    const day = statsLocalDay(log?.timestamp || Date.now())
-    const key = `${bot.id}|${day}`
-    const row = rows.get(key) || { bot_id: bot.id, day, received: 0, sent: 0, groups: 0, private: 0, media: 0, commands: 0 }
-    row[direction] += 1
-    const type = classifyStatsLog(message)
-    if (type.group) row.groups += 1
-    if (type.private) row.private += 1
-    if (type.media) row.media += 1
-    if (/接收\s*<-\s*[^|]*\|\s*(?:[!/]|命令)/i.test(message)) row.commands += 1
-    rows.set(key, row)
-  }
-
-  const today = statsLocalDay(new Date())
-  const rowList = [...rows.values()]
-  const sumRows = (items) => items.reduce((total, row) => ({
-    received: total.received + row.received,
-    sent: total.sent + row.sent,
-    total: total.received + row.received + total.sent + row.sent,
-    groups: total.groups + row.groups,
-    private: total.private + row.private,
-    media: total.media + row.media,
-    commands: total.commands + row.commands,
-  }), { received: 0, sent: 0, total: 0, groups: 0, private: 0, media: 0, commands: 0 })
-  const period = (start) => {
-    const items = rowList.filter((row) => row.day >= start && row.day <= today)
-    const summary = sumRows(items)
-    return { ...summary, active_days: new Set(items.map((row) => row.day)).size }
-  }
-  const todayDate = new Date(`${today}T00:00:00`)
-  const weekStart = statsLocalDay(new Date(todayDate.getFullYear(), todayDate.getMonth(), todayDate.getDate() - todayDate.getDay() + (todayDate.getDay() === 0 ? -6 : 1)))
-  const monthStart = `${today.slice(0, 8)}01`
-  const periods = { day: period(today), week: period(weekStart), month: period(monthStart) }
-  const botPeriods = Object.fromEntries(Object.entries({
-    day: today,
-    week: weekStart,
-    month: monthStart,
-  }).map(([name, start]) => [name, (Array.isArray(bots) ? bots : []).map((bot) => {
-    const summary = sumRows(rowList.filter((row) => row.bot_id === bot.id && row.day >= start && row.day <= today))
-    return { id: bot.id, name: bot.name, qq: bot.qq, ...summary }
-  }).sort((a, b) => b.total - a.total)]))
-  const series = Array.from({ length: 14 }, (_, index) => {
-    const day = statsShiftDay(today, index - 13)
-    return { day, ...sumRows(rowList.filter((row) => row.day === day)) }
-  })
-  return { periods, bots: botPeriods, series, updated_at: new Date().toISOString() }
+function isNotificationActive(item) {
+  if (!item?.expires_at) return true
+  const expiresAt = Date.parse(item.expires_at)
+  return !Number.isFinite(expiresAt) || expiresAt > Date.now()
 }
 
-function mergeStatsSnapshots(persisted, live) {
-  if (!persisted) return live
-  if (!live) return persisted
-  const summaryKeys = ['received', 'sent', 'total', 'groups', 'private', 'media', 'commands', 'active_days']
-  const mergeSummary = (left = {}, right = {}) => summaryKeys.reduce((result, key) => {
-    result[key] = Math.max(Number(left[key] || 0), Number(right[key] || 0))
-    return result
-  }, {})
-  const periods = Object.fromEntries(['day', 'week', 'month'].map((key) => [key, mergeSummary(persisted.periods?.[key], live.periods?.[key])]))
-  const bots = Object.fromEntries(['day', 'week', 'month'].map((period) => {
-    const persistedRows = persisted.bots?.[period] || []
-    const liveRows = live.bots?.[period] || []
-    const rows = new Map(persistedRows.map((row) => [String(row.id), row]))
-    liveRows.forEach((row) => rows.set(String(row.id), { ...rows.get(String(row.id)), ...row, ...mergeSummary(rows.get(String(row.id)), row) }))
-    return [period, [...rows.values()].sort((a, b) => Number(b.total || 0) - Number(a.total || 0))]
-  }))
-  const seriesRows = new Map((persisted.series || []).map((row) => [row.day, row]))
-  ;(live.series || []).forEach((row) => seriesRows.set(row.day, { ...seriesRows.get(row.day), ...row, ...mergeSummary(seriesRows.get(row.day), row) }))
-  return { periods, bots, series: [...seriesRows.values()].sort((a, b) => String(a.day).localeCompare(String(b.day))), updated_at: live.updated_at || persisted.updated_at }
-}
-
-function resolveQuickLoginCommand(command, logs) {
-  const trimmed = command.trim()
-  const match = trimmed.match(/^-q\s+(\d+)$/i)
-  if (!match) return trimmed
-  const index = Number(match[1])
-  const accounts = logs.map((log) => cleanLogMessage(log.message).match(/(?:^|\s)(\d+)\.\s*(\d{5,20})\s+/)).filter(Boolean)
-  const selected = accounts.find((item) => Number(item[1]) === index)
-  return selected ? `-q ${selected[2]}` : trimmed
-}
-
-async function api(path, options, timeoutMs = 15000) {
-  const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+function readNotificationState() {
+  const fallback = { version: 1, initialized: false, cursor: '', items: [] }
   try {
-    const token = apiToken()
-    const response = await fetch(`${API_BASE}${path}`, {
-      ...options,
-      signal: controller.signal,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(options?.headers || {}),
-      },
-    })
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok) throw new Error(payload.detail || `请求失败 (${response.status})`)
-    return payload
-  } catch (error) {
-    if (error?.name === 'AbortError') throw new Error('管理服务响应超时，请重启控制台后重试')
-    throw error
-  } finally {
-    window.clearTimeout(timeout)
+    const saved = window.localStorage.getItem(NOTIFICATION_STORAGE_KEY)
+    if (!saved) return fallback
+    const parsed = JSON.parse(saved)
+    const items = Array.isArray(parsed?.items)
+      ? parsed.items.map(normalizeNotification).filter(Boolean).filter(isNotificationActive).slice(0, NOTIFICATION_MAX_ITEMS)
+      : []
+    return {
+      version: 1,
+      initialized: Boolean(parsed?.initialized),
+      cursor: String(parsed?.cursor || ''),
+      items,
+    }
+  } catch {
+    return fallback
   }
 }
 
-function dashboardApi(path) {
-  return api(path, undefined, DASHBOARD_REQUEST_TIMEOUT_MS)
+function formatNotificationTime(value) {
+  const timestamp = Date.parse(String(value || ''))
+  if (!Number.isFinite(timestamp)) return '刚刚'
+  return new Date(timestamp).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function formatUptime(seconds) {
+  const totalSeconds = Math.max(0, Math.floor(Number(seconds) || 0))
+  const displaySeconds = totalSeconds % 60
+  if (totalSeconds < 60) return `${totalSeconds} 秒`
+  const minutes = Math.floor(totalSeconds / 60)
+  if (minutes < 60) return `${minutes} 分 ${String(displaySeconds).padStart(2, '0')} 秒`
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  if (hours < 24) return `${hours} 小时${remainingMinutes ? ` ${remainingMinutes} 分` : ''} ${String(displaySeconds).padStart(2, '0')} 秒`
+  const days = Math.floor(hours / 24)
+  const remainingHours = hours % 24
+  return `${days} 天${remainingHours ? ` ${remainingHours} 小时` : ''}${remainingMinutes ? ` ${remainingMinutes} 分` : ''} ${String(displaySeconds).padStart(2, '0')} 秒`
 }
 
 function App() {
@@ -306,8 +164,6 @@ function App() {
   const [stats, setStats] = useState(fallbackStats)
   const [napcat, setNapcat] = useState({ available: false, running: 0 })
   const [resources, setResources] = useState(null)
-  const [plugins, setPlugins] = useState([])
-  const [pluginProject, setPluginProject] = useState(null)
   const [pluginFrameworks, setPluginFrameworks] = useState(EMPTY_PLUGIN_FRAMEWORKS)
   const [resourceSetup, setResourceSetup] = useState(null)
   const [resourceSetupOpen, setResourceSetupOpen] = useState(false)
@@ -326,9 +182,22 @@ function App() {
   const [online, setOnline] = useState(false)
   const [webUiMenuOpen, setWebUiMenuOpen] = useState(false)
   const [embeddedWebUi, setEmbeddedWebUi] = useState(null)
+  const [notificationState, setNotificationState] = useState(readNotificationState)
+  const [notificationOpen, setNotificationOpen] = useState(false)
+  const returnPageRef = useRef('QQ 账号')
   const dashboardLoadingRef = useRef(false)
   const webUiMenuRef = useRef(null)
+  const notificationStateRef = useRef(notificationState)
   const [theme, setTheme] = useState(() => window.localStorage.getItem('qq-console-theme') || 'system')
+  const [themePackage, setThemePackage] = useState(() => {
+    const saved = window.localStorage.getItem(THEME_PACKAGE_STORAGE_KEY)
+    return THEME_PACKAGES.some((item) => item.id === saved) ? saved : DEFAULT_THEME_PACKAGE.id
+  })
+  const [font, setFont] = useState(() => {
+    const saved = window.localStorage.getItem(FONT_STORAGE_KEY)
+    return saved === 'harmony' || !FONT_OPTIONS.some((option) => option.value === saved) ? 'system' : saved
+  })
+  const [preferences, setPreferences] = useState(readPreferences)
   const [favoriteKeys, setFavoriteKeys] = useState(() => {
     try {
       const saved = window.localStorage.getItem(FAVORITES_STORAGE_KEY)
@@ -351,8 +220,36 @@ function App() {
   }, [theme])
 
   useEffect(() => {
+    const selectedPackage = getThemePackage(themePackage)
+    document.documentElement.dataset.themePackage = selectedPackage.id
+    window.localStorage.setItem(THEME_PACKAGE_STORAGE_KEY, selectedPackage.id)
+  }, [themePackage])
+
+  useEffect(() => {
+    const selectedFont = FONT_OPTIONS.find((option) => option.value === font) || FONT_OPTIONS[0]
+    document.documentElement.dataset.font = selectedFont.value
+    document.documentElement.style.setProperty('--app-font-family', selectedFont.family)
+    window.localStorage.setItem(FONT_STORAGE_KEY, selectedFont.value)
+  }, [font])
+
+  useEffect(() => {
+    document.documentElement.dataset.density = preferences.density
+    document.documentElement.dataset.reducedMotion = preferences.reduceMotion ? 'true' : 'false'
+    window.localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(preferences))
+  }, [preferences])
+
+  useEffect(() => {
     if (favoriteKeys !== null) window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(favoriteKeys))
   }, [favoriteKeys])
+
+  useEffect(() => {
+    notificationStateRef.current = notificationState
+    try {
+      window.localStorage.setItem(NOTIFICATION_STORAGE_KEY, JSON.stringify(notificationState))
+    } catch {
+      // Notification history is optional; a full local storage must not break the console.
+    }
+  }, [notificationState])
 
   useEffect(() => {
     if (!webUiMenuOpen) return undefined
@@ -375,9 +272,92 @@ function App() {
     if (!resources.initialized) setResourceSetupOpen(true)
   }, [resources?.initialized])
 
+  useEffect(() => {
+    let disposed = false
+    let timer = null
+    let inFlight = false
+
+    if (!preferences.notificationsEnabled) return undefined
+
+    const syncNotifications = async () => {
+      if (disposed || inFlight) return
+      inFlight = true
+      try {
+        const current = notificationStateRef.current
+        const endpoint = new URL(NOTIFICATION_FEED_URL)
+        // Keep the one-minute polling interval from serving a stale branch file
+        // from an intermediate cache while preserving normal CDN caching.
+        endpoint.searchParams.set('v', String(Math.floor(Date.now() / NOTIFICATION_POLL_INTERVAL_MS)))
+        const response = await fetch(endpoint, { headers: { Accept: 'application/json' } })
+        if (response.ok) {
+          const payload = await response.json()
+          const remoteItems = Array.isArray(payload) ? payload : payload?.items
+          const incoming = Array.isArray(remoteItems)
+            ? remoteItems.map(normalizeNotification).filter(Boolean).filter(isNotificationActive)
+            : []
+          const nextCursor = String(payload?.cursor || current.cursor)
+          // GitHub exposes a complete snapshot rather than an append-only
+          // cursor. Treat the remote file as authoritative so deleted notices
+          // disappear locally, while the local read flag survives polling.
+          const remoteById = new Map()
+          incoming.forEach((item) => remoteById.set(item.id, item))
+          const remoteSnapshot = [...remoteById.values()].sort((left, right) => {
+            const leftTime = Date.parse(left.created_at)
+            const rightTime = Date.parse(right.created_at)
+            if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) return rightTime - leftTime
+            return 0
+          })
+          const cachedById = new Map(current.items.map((item) => [item.id, item]))
+          const nextState = {
+            version: 1,
+            initialized: true,
+            cursor: nextCursor,
+            items: remoteSnapshot.map((item) => ({
+              ...item,
+              read: current.initialized ? Boolean(cachedById.get(item.id)?.read) : true,
+            })).slice(0, NOTIFICATION_MAX_ITEMS),
+          }
+          if (current.initialized) {
+            const newItems = remoteSnapshot.filter((item) => !cachedById.has(item.id))
+            newItems.forEach((item) => {
+              const nextItem = nextState.items.find((candidate) => candidate.id === item.id)
+              if (nextItem) nextItem.read = false
+            })
+          }
+          notificationStateRef.current = nextState
+          setNotificationState(nextState)
+        }
+      } catch {
+        // Remote notices are optional. Keep the last local snapshot on network errors.
+      } finally {
+        inFlight = false
+        if (!disposed) timer = window.setTimeout(syncNotifications, NOTIFICATION_POLL_INTERVAL_MS)
+      }
+    }
+
+    void syncNotifications()
+    return () => {
+      disposed = true
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [preferences.notificationsEnabled])
+
+  useEffect(() => {
+    if (!notificationOpen) return undefined
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setNotificationOpen(false)
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [notificationOpen])
+
   const notify = useCallback((message) => {
     setToast(message)
     window.setTimeout(() => setToast(''), 2400)
+  }, [])
+
+  const updatePreference = useCallback((key, value) => {
+    setPreferences((current) => ({ ...current, [key]: value }))
   }, [])
 
   const loadDashboard = useCallback(async (showToast = false) => {
@@ -408,8 +388,6 @@ function App() {
       if (pluginData) {
         const normalizedPlugins = normalizePluginFrameworks(pluginData)
         setPluginFrameworks(normalizedPlugins)
-        setPlugins(normalizedPlugins.nonebot.plugins)
-        setPluginProject(normalizedPlugins.nonebot.project)
       }
 
       const reachable = results.slice(0, 5).some((result) => result.status === 'fulfilled')
@@ -439,9 +417,10 @@ function App() {
 
   useEffect(() => {
     loadDashboard()
+    if (!preferences.autoRefresh) return undefined
     const timer = window.setInterval(() => loadDashboard(), DASHBOARD_POLL_INTERVAL_MS)
     return () => window.clearInterval(timer)
-  }, [loadDashboard])
+  }, [loadDashboard, preferences.autoRefresh])
 
   useEffect(() => {
     const host = window.location.hostname || '127.0.0.1'
@@ -652,14 +631,28 @@ function App() {
       })
       const normalizedPlugins = normalizePluginFrameworks(result)
       setPluginFrameworks(normalizedPlugins)
-      setPlugins(normalizedPlugins.nonebot.plugins)
-      setPluginProject(normalizedPlugins.nonebot.project)
       notify(`${enabled ? '已启用' : '已停用'}插件「${plugin.name}」，重启 Bot 后生效`)
     } catch (error) {
       notify(`插件设置失败：${error.message}`)
     } finally {
       setBusy('')
     }
+  }
+
+  const unreadNotificationCount = preferences.notificationsEnabled
+    ? notificationState.items.filter((item) => !item.read && isNotificationActive(item)).length
+    : 0
+  const openNotificationCenter = () => {
+    if (!preferences.notificationsEnabled) {
+      notify('通知已关闭，可在设置中重新开启')
+      return
+    }
+    setNotificationOpen(true)
+    setNotificationState((current) => {
+      const next = { ...current, items: current.items.map((item) => ({ ...item, read: true })) }
+      notificationStateRef.current = next
+      return next
+    })
   }
 
   const isFavorite = (key) => (favoriteKeys || []).includes(key)
@@ -724,44 +717,56 @@ function App() {
     }
   }, [notify, resourceSetup?.status, trackResourceSetup])
 
-  const isAccountPage = active === '概览' || active === 'QQ 账号'
+  const navigate = useCallback((nextPage) => {
+    setActive((currentPage) => {
+      if (SECONDARY_PAGE_NAMES.has(nextPage) && nextPage !== currentPage) returnPageRef.current = currentPage
+      return nextPage
+    })
+  }, [])
+
+  const returnToPreviousPage = useCallback(() => {
+    setActive(returnPageRef.current || 'QQ 账号')
+  }, [])
+
+  const isAccountPage = active === 'QQ 账号'
 
   return <div className="app-shell">
     <header className="app-topbar">
       <div className="topbar-brand-wrap" ref={webUiMenuRef}><button type="button" className={`topbar-brand ${webUiMenuOpen ? 'open' : ''}`} onClick={() => setWebUiMenuOpen(value => !value)} aria-haspopup="menu" aria-expanded={webUiMenuOpen}><span>QQ 控制台</span><ChevronDown size={14} /></button>{webUiMenuOpen && <div className="webui-switcher" role="menu"><div className="webui-switcher-heading">切换 WebUI{selectedBot && <small>{selectedBot.name}</small>}</div>{selectedBot ? <><WebUiMenuItem icon={Server} label="NapCat WebUI" port={selectedBot.napcat_port || 6099} onClick={() => openWebUi('napcat')} /><WebUiMenuItem icon={Bot} label="AstrBot WebUI" port={astrbotDashboardPort(selectedBot.napcat_port || 6099)} disabled={selectedBot.framework !== 'astrbot'} disabledText="当前账号未使用 AstrBot" onClick={() => openWebUi('astrbot')} /></> : <div className="webui-switcher-empty">请先创建或选择一个 QQ 账号</div>}</div>}</div>
-      <div className="topbar-actions"><button className="topbar-action" onClick={() => notify('暂无新的系统通知')} aria-label="通知"><Bell size={16} /></button><span className={`service-pill ${online ? 'online' : ''}`}><i />{online ? '本机服务正常' : '等待连接'}</span><WindowControls /></div>
+      <div className="topbar-actions"><button className={`topbar-action ${unreadNotificationCount ? 'has-unread' : ''}`} onClick={openNotificationCenter} aria-label={unreadNotificationCount ? `通知，有${unreadNotificationCount}条未读` : '通知'} title={unreadNotificationCount ? `${unreadNotificationCount} 条未读通知` : '通知'}><Bell size={16} />{unreadNotificationCount > 0 && <i className="notification-dot" aria-hidden="true" />}</button><span className={`service-pill ${online ? 'online' : ''}`}><i />{online ? '本机服务正常' : '等待连接'}</span><WindowControls /></div>
     </header>
 
     <div className={`app-body ${active === '系统设置' ? 'settings-mode' : ''} ${embeddedWebUi ? 'webui-embedded-mode' : ''}`}>
       {embeddedWebUi ? <EmbeddedWebUiPage target={embeddedWebUi} onClose={() => setEmbeddedWebUi(null)} /> : <>
       <aside className="sidebar">
         <nav className="sidebar-nav">
-          <NavItem icon={LayoutDashboard} label="概览" active={active} onClick={setActive} favoriteKey="page:概览" favorite={isFavorite('page:概览')} onToggleFavorite={toggleFavorite} />
-          <NavItem icon={Puzzle} label="插件管理" active={active} onClick={setActive} favoriteKey="page:插件管理" favorite={isFavorite('page:插件管理')} onToggleFavorite={toggleFavorite} />
-          <NavItem icon={UserRound} label="QQ 账号" active={active} onClick={setActive} favoriteKey="page:QQ 账号" favorite={isFavorite('page:QQ 账号')} onToggleFavorite={toggleFavorite} />
-          <NavItem icon={Activity} label="运行状态" active={active} onClick={() => setActive('运行状态')} favoriteKey="page:运行状态" favorite={isFavorite('page:运行状态')} onToggleFavorite={toggleFavorite} />
+          <NavItem icon={LayoutDashboard} label="概览" active={active} onClick={navigate} favoriteKey="page:概览" favorite={isFavorite('page:概览')} onToggleFavorite={toggleFavorite} />
+          <NavItem icon={Puzzle} label="插件管理" active={active} onClick={navigate} favoriteKey="page:插件管理" favorite={isFavorite('page:插件管理')} onToggleFavorite={toggleFavorite} />
+          <NavItem icon={UserRound} label="QQ 账号" active={active} onClick={navigate} favoriteKey="page:QQ 账号" favorite={isFavorite('page:QQ 账号')} onToggleFavorite={toggleFavorite} />
+          <NavItem icon={Activity} label="运行状态" active={active} onClick={navigate} favoriteKey="page:运行状态" favorite={isFavorite('page:运行状态')} onToggleFavorite={toggleFavorite} />
           <div className="nav-section-label">收藏</div>
           {favoriteBots.length || favoritePages.length ? <>
-            {favoriteBots.map((bot) => <NavItem key={bot.id} icon={Bot} label={bot.name} active={active === 'QQ 账号' && selectedBot?.id === bot.id} onClick={() => { setActive('QQ 账号'); setSelectedBotId(bot.id) }} favoriteKey={`bot:${bot.id}`} favorite onToggleFavorite={toggleFavorite} />)}
-            {favoritePages.map(({ key, label, icon: Icon }) => <NavItem key={key} icon={Icon} label={label} active={active} onClick={setActive} favoriteKey={key} favorite onToggleFavorite={toggleFavorite} />)}
+            {favoriteBots.map((bot) => <NavItem key={bot.id} icon={Bot} label={bot.name} active={active === 'QQ 账号' && selectedBot?.id === bot.id} onClick={() => { navigate('QQ 账号'); setSelectedBotId(bot.id) }} favoriteKey={`bot:${bot.id}`} favorite onToggleFavorite={toggleFavorite} />)}
+            {favoritePages.map(({ key, label, icon: Icon }) => <NavItem key={key} icon={Icon} label={label} active={active} onClick={navigate} favoriteKey={key} favorite onToggleFavorite={toggleFavorite} />)}
           </> : <div className="nav-empty">点击菜单右侧的星标添加快捷入口</div>}
           <div className="nav-section-label">服务</div>
-          <NavItem icon={Server} label="NapCat" active={active} onClick={setActive} favoriteKey="page:NapCat" favorite={isFavorite('page:NapCat')} onToggleFavorite={toggleFavorite} />
-          <NavItem icon={SquareTerminal} label="NoneBot" active={active} onClick={setActive} favoriteKey="page:NoneBot" favorite={isFavorite('page:NoneBot')} onToggleFavorite={toggleFavorite} />
-          <NavItem icon={Bot} label="AstrBot" active={active} onClick={setActive} favoriteKey="page:AstrBot" favorite={isFavorite('page:AstrBot')} onToggleFavorite={toggleFavorite} />
+          <NavItem icon={Server} label="NapCat" active={active} onClick={navigate} favoriteKey="page:NapCat" favorite={isFavorite('page:NapCat')} onToggleFavorite={toggleFavorite} />
+          <NavItem icon={SquareTerminal} label="NoneBot" active={active} onClick={navigate} favoriteKey="page:NoneBot" favorite={isFavorite('page:NoneBot')} onToggleFavorite={toggleFavorite} />
+          <NavItem icon={Bot} label="AstrBot" active={active} onClick={navigate} favoriteKey="page:AstrBot" favorite={isFavorite('page:AstrBot')} onToggleFavorite={toggleFavorite} />
         </nav>
         <div className="sidebar-bottom">
-          <button className="bottom-item" onClick={() => setActive('系统设置')}><Settings size={16} />设置</button>
+          <button className="bottom-item" onClick={() => navigate('系统设置')}><Settings size={16} />设置</button>
           <button className="bottom-item" onClick={() => notify('桌面控制台正在运行')}><CircleHelp size={16} />帮助</button>
         </div>
       </aside>
 
       <main className={`main-content ${active === '运行状态' ? 'runtime-mode' : ''}`}>
-        {active === '系统设置' ? <SettingsPage theme={theme} onThemeChange={setTheme} onBack={() => setActive('QQ 账号')} onNotice={notify} /> : active === '运行状态' ? <RuntimeStatusPage bots={bots} system={system} stats={stats} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); setActive('QQ 账号') }} /> : active === '插件管理' ? <PluginPage frameworks={pluginFrameworks} refreshing={refreshing} onRefresh={refresh} busy={busy} onToggle={togglePlugin} /> : ['NapCat', 'NoneBot', 'AstrBot'].includes(active) ? <ResourcePage key={active} kind={active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot'} resource={resources?.[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} officialUrl={OFFICIAL_RESOURCE_URLS[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} setup={resourceSetup} onOpenSetup={() => setResourceSetupOpen(true)} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onBack={() => setActive('QQ 账号')} /> : isAccountPage ? <AccountWorkspace bots={bots} selectedBot={selectedBot} selectedBotId={selectedBotId} setSelectedBotId={setSelectedBotId} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); setActive('QQ 账号') }} onCreate={() => setCreateOpen(true)} onDelete={() => setDeleteTarget(selectedBot)} logs={logs} logsPaused={logsPaused} onTogglePause={() => { setLogsPaused(value => !value); notify(logsPaused ? '日志同步已恢复' : '日志同步已暂停') }} onClear={clearLogs} onCommand={sendCommand} onSavePassword={savePassword} onSavePort={savePort} onSaveNapcatPort={saveNapcatPort} onSaveFramework={saveFramework} onOpenWebUi={openWebUi} onNotice={notify} /> : <PlaceholderPage active={active} onBack={() => setActive('QQ 账号')} />}
+        {active === '系统设置' ? <SettingsPage theme={theme} themePackage={themePackage} font={font} preferences={preferences} online={online} onThemeChange={setTheme} onThemePackageChange={setThemePackage} onFontChange={setFont} onPreferenceChange={updatePreference} onBack={returnToPreviousPage} onNavigate={navigate} onRefresh={refresh} onNotice={notify} /> : active === '概览' ? <OverviewPage bots={bots} stats={stats} napcat={napcat} online={online} logs={logs} refreshing={refreshing} refresh={refresh} onNavigate={navigate} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} /> : active === '运行状态' ? <RuntimeStatusPage bots={bots} system={system} stats={stats} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} /> : active === '插件管理' ? <PluginPage frameworks={pluginFrameworks} refreshing={refreshing} onRefresh={refresh} busy={busy} onToggle={togglePlugin} /> : ['NapCat', 'NoneBot', 'AstrBot'].includes(active) ? <ResourcePage key={active} kind={active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot'} resource={resources?.[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} officialUrl={OFFICIAL_RESOURCE_URLS[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} setup={resourceSetup} onOpenSetup={() => setResourceSetupOpen(true)} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onBack={returnToPreviousPage} /> : isAccountPage ? <AccountWorkspace bots={bots} selectedBot={selectedBot} selectedBotId={selectedBotId} setSelectedBotId={setSelectedBotId} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} onCreate={() => setCreateOpen(true)} onDelete={() => setDeleteTarget(selectedBot)} logs={logs} logsPaused={logsPaused} onTogglePause={() => { setLogsPaused(value => !value); notify(logsPaused ? '日志同步已恢复' : '日志同步已暂停') }} onClear={clearLogs} onCommand={sendCommand} onSavePassword={savePassword} onSavePort={savePort} onSaveNapcatPort={saveNapcatPort} onSaveFramework={saveFramework} onOpenWebUi={openWebUi} onNotice={notify} /> : <PlaceholderPage active={active} onBack={() => navigate('QQ 账号')} />}
       </main>
       </>}
     </div>
 
+    {notificationOpen && <NotificationCenterModal items={notificationState.items.filter(isNotificationActive)} onClose={() => setNotificationOpen(false)} />}
     {createOpen && <CreateAccountModal account={newAccount} creating={creating} onChange={setNewAccount} onClose={closeCreateModal} onSubmit={createAccount} />}
     {deleteTarget && <DeleteAccountModal bot={deleteTarget} deleting={deleting} onClose={() => !deleting && setDeleteTarget(null)} onConfirm={deleteAccount} />}
     {resources && resourceSetupOpen && <ResourceSetupModal resources={resources} setup={resourceSetup} onSetup={startResourceSetup} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onClose={() => setResourceSetupOpen(false)} />}
@@ -771,6 +776,43 @@ function App() {
 
 function WebUiMenuItem({ icon: Icon, label, port, disabled = false, disabledText = '', onClick }) {
   return <button type="button" className="webui-switcher-item" role="menuitem" disabled={disabled} onClick={onClick}><span className="webui-switcher-icon"><Icon size={15} /></span><span><strong>{label}</strong><small>{disabled ? disabledText : `本机端口 ${port}`}</small></span><ExternalLink size={13} /></button>
+}
+
+function OverviewPage({ bots, stats, napcat, online, logs, refreshing, refresh, onNavigate, onSelectBot }) {
+  const dayStats = stats?.periods?.day || {}
+  const runningBots = bots.filter((bot) => isBotRunning(bot))
+  const recentLogs = useMemo(() => (Array.isArray(logs) ? [...logs].reverse().slice(0, 5) : []), [logs])
+  const todayMessages = Number(dayStats.total || 0)
+  const serviceReady = Boolean(online && napcat?.available)
+
+  return <section className="overview-page">
+    <header className="overview-page-header">
+      <div><div className="eyebrow">控制台</div><h1>概览</h1><p>快速了解 QQ Bot 的运行情况和最近活动。</p></div>
+      <div className="overview-header-actions"><span className={`overview-sync ${online ? 'online' : ''}`}><i />{online ? '实时同步中' : '等待管理 API'}</span><button type="button" className="secondary overview-refresh" onClick={refresh} disabled={refreshing}><RefreshCw size={14} className={refreshing ? 'spin' : ''} />刷新</button></div>
+    </header>
+
+    <div className="overview-metrics">
+      <div className="overview-metric"><div className="overview-metric-icon purple"><UserRound size={18} /></div><div><span>QQ 账号</span><strong>{bots.length}</strong><em>{runningBots.length} 个运行中</em></div></div>
+      <div className="overview-metric"><div className="overview-metric-icon green"><Bot size={18} /></div><div><span>在线 Bot</span><strong>{runningBots.length}<small> / {bots.length}</small></strong><em>{bots.length ? '账号运行状态' : '尚未创建账号'}</em></div></div>
+      <div className="overview-metric"><div className="overview-metric-icon blue"><MessageSquare size={18} /></div><div><span>今日消息</span><strong>{todayMessages.toLocaleString()}</strong><em>收到与发出的消息</em></div></div>
+      <div className="overview-metric"><div className="overview-metric-icon orange"><Server size={18} /></div><div><span>管理服务</span><strong>{serviceReady ? '正常' : '待连接'}</strong><em>{napcat?.available ? 'NapCat 资源已就绪' : '请先配置运行资源'}</em></div></div>
+    </div>
+
+    <div className="overview-grid">
+      <section className="overview-card overview-bots-card"><div className="overview-card-heading"><div><h2>账号运行概况</h2><p>查看账号状态并快速进入管理页。</p></div><button type="button" className="overview-link" onClick={() => onNavigate('QQ 账号')}>管理账号 <ChevronRight size={14} /></button></div>{bots.length ? <div className="overview-bot-list">{bots.slice(0, 5).map((bot) => <button type="button" className="overview-bot-row" key={bot.id} onClick={() => onSelectBot(bot.id)}><BotAvatar bot={bot} className="overview-bot-avatar" /><span className="overview-bot-copy"><strong>{bot.name}</strong><small>{bot.qq} · {bot.framework_label || (bot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')}</small><BotUptime bot={bot} /></span><StatusPill label={botStatusLabel(bot)} state={botStatusState(bot)} /><ChevronRight className="overview-row-arrow" size={15} /></button>)}</div> : <div className="overview-empty"><UserRound size={18} /><span>还没有 QQ 账号</span><button type="button" className="secondary" onClick={() => onNavigate('QQ 账号')}>新建账号</button></div>}</section>
+
+      <div className="overview-side">
+        <section className="overview-card"><div className="overview-card-heading"><div><h2>服务状态</h2><p>本机运行环境</p></div><button type="button" className="overview-link" onClick={() => onNavigate('运行状态')}>详细状态 <ChevronRight size={14} /></button></div><div className="overview-service-list"><div><span><i className={serviceReady ? 'green' : ''} />管理 API</span><StatusPill label={online ? '正常' : '等待连接'} state={online ? 'green' : 'muted'} /></div><div><span><i className={napcat?.available ? 'green' : ''} />NapCat</span><StatusPill label={napcat?.available ? `${napcat.running || 0} 个运行中` : '未配置'} state={napcat?.available ? 'green' : 'muted'} /></div><div><span><i className={runningBots.length ? 'green' : ''} />机器人框架</span><StatusPill label={runningBots.length ? '运行中' : '未启动'} state={runningBots.length ? 'green' : 'muted'} /></div></div></section>
+        <section className="overview-card overview-actions-card"><div className="overview-card-heading"><div><h2>常用入口</h2><p>继续处理你的 Bot</p></div></div><div className="overview-actions"><button type="button" onClick={() => onNavigate('QQ 账号')}><UserRound size={15} />管理 QQ 账号</button><button type="button" onClick={() => onNavigate('运行状态')}><Activity size={15} />查看运行状态</button><button type="button" onClick={() => onNavigate('插件管理')}><Puzzle size={15} />管理插件</button></div></section>
+      </div>
+    </div>
+
+    <section className="overview-card overview-activity-card"><div className="overview-card-heading"><div><h2>最近活动</h2><p>来自本机服务的最新日志</p></div><button type="button" className="overview-link" onClick={() => onNavigate('QQ 账号')}>查看账号日志 <ChevronRight size={14} /></button></div>{recentLogs.length ? <div className="overview-activity-list">{recentLogs.map((log, index) => { const level = normalizeLogLevel(log.level, log.message); return <div className="overview-activity-row" key={`${log.id || log.timestamp || log.time || index}`}><i className={level} /><time>{log.time || '—'}</time><strong>{log.source || '系统'}</strong><span>{String(log.message || '').replace(/\s+/g, ' ').slice(0, 110)}</span></div> })}</div> : <div className="overview-empty compact"><Activity size={18} /><span>暂无活动记录</span></div>}</section>
+  </section>
+}
+
+function NotificationCenterModal({ items, onClose }) {
+  return <div className="modal-backdrop notification-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="notification-modal" role="dialog" aria-modal="true" aria-labelledby="notification-center-title"><div className="modal-header notification-modal-header"><div><div className="eyebrow">{NOTIFICATION_SOURCE}</div><h2 id="notification-center-title">通知中心</h2><p>来自远程通知服务的系统消息</p></div><button type="button" className="modal-close" onClick={onClose} aria-label="关闭通知中心"><X size={18} /></button></div>{items.length ? <div className="notification-list">{items.map((item) => <article className={`notification-item ${item.level}`} key={item.id}><div className="notification-item-heading"><span className="notification-level-dot" /><strong>{item.title}</strong><time>{formatNotificationTime(item.created_at)}</time></div><p>{item.body}</p>{item.link && <a href={item.link} onClick={(event) => { event.preventDefault(); openExternal(item.link) }}><ExternalLink size={13} />打开相关链接</a>}<small className="notification-source">{NOTIFICATION_SOURCE}</small></article>)}</div> : <div className="notification-empty"><Bell size={20} /><strong>暂无通知</strong><span>新的系统消息会显示在这里</span></div>}</section></div>
 }
 
 function EmbeddedWebUiPage({ target, onClose }) {
@@ -801,30 +843,6 @@ function EmbeddedWebUiPage({ target, onClose }) {
 function WindowControls() {
   if (!window.desktopInfo?.isDesktop) return null
   return <div className="window-controls"><button onClick={() => window.windowControls?.minimize()} aria-label="最小化" title="最小化"><Minimize2 size={14} /></button><button onClick={() => window.windowControls?.toggleMaximize()} aria-label="最大化" title="最大化"><Maximize2 size={14} /></button><button className="window-close" onClick={() => window.windowControls?.close()} aria-label="关闭" title="关闭"><X size={15} /></button></div>
-}
-
-async function fetchAuthenticatedBlob(path) {
-  const token = apiToken()
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  })
-  if (!response.ok) {
-    const payload = await response.json().catch(() => ({}))
-    throw new Error(payload.detail || `资源请求失败 (${response.status})`)
-  }
-  return response.blob()
-}
-
-async function downloadAuthenticatedFile(path, filename) {
-  const blob = await fetchAuthenticatedBlob(path)
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 function useAuthenticatedMedia(path, enabled) {
@@ -1012,7 +1030,7 @@ function AccountWorkspace({ bots, selectedBot, selectedBotId, setSelectedBotId, 
         <div className="detail-tabs"><button className={`detail-tab ${detailView === 'overview' ? 'active' : ''}`} onClick={() => setDetailView('overview')}>概览</button><button className={`detail-tab ${detailView === 'config' ? 'active' : ''}`} onClick={() => setDetailView('config')}>配置</button></div>
         <div className={`detail-scroll ${detailView === 'config' ? 'config-detail' : ''}`}>
           {detailView === 'overview' ? <>
-          <div className="account-summary"><div className="summary-row"><span>状态</span><StatusPill label={botStatusLabel(selectedBot)} state={botStatusState(selectedBot)} /></div><div className="summary-row"><span>QQ 号</span><b className="summary-value mono">{selectedBot.qq}</b></div><div className="summary-row"><span>协议端</span><StatusPill label="NapCat" state={!napcat.available ? 'red' : selectedBot.runtime?.napcat?.running ? 'green' : 'muted'} /></div><div className="summary-row"><span>机器人框架</span><StatusPill label={selectedBot.framework_label || (selectedBot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')} state={selectedBot.runtime?.framework?.running ? 'green' : 'muted'} /></div><div className="summary-row"><span>OneBot 端口</span><b className="summary-value mono">{selectedBot.port || '—'}</b></div><div className="summary-row"><span>NapCat WebUI</span><b className="summary-value mono">{selectedBot.napcat_port || '—'}</b></div></div>
+          <div className="account-summary"><div className="summary-row"><span>状态</span><StatusPill label={botStatusLabel(selectedBot)} state={botStatusState(selectedBot)} /></div><div className="summary-row"><span>持续运行</span><BotUptime bot={selectedBot} /></div><div className="summary-row"><span>QQ 号</span><b className="summary-value mono">{selectedBot.qq}</b></div><div className="summary-row"><span>协议端</span><StatusPill label="NapCat" state={!napcat.available ? 'red' : selectedBot.runtime?.napcat?.running ? 'green' : 'muted'} /></div><div className="summary-row"><span>机器人框架</span><StatusPill label={selectedBot.framework_label || (selectedBot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')} state={selectedBot.runtime?.framework?.running ? 'green' : 'muted'} /></div><div className="summary-row"><span>OneBot 端口</span><b className="summary-value mono">{selectedBot.port || '—'}</b></div><div className="summary-row"><span>NapCat WebUI</span><b className="summary-value mono">{selectedBot.napcat_port || '—'}</b></div></div>
           <div className="conversation"><div className="conversation-header"><div><h3>实时活动</h3><span>{logsPaused ? '日志同步已暂停' : '来自本机服务的最新状态'}</span></div><div className="conversation-tools"><button className="plain-icon" onClick={onTogglePause} aria-label={logsPaused ? '恢复日志' : '暂停日志'} title={logsPaused ? '恢复日志更新' : '暂停日志更新'}>{logsPaused ? <Play size={15} /> : <Pause size={15} />}</button><button className="plain-icon" onClick={onClear} aria-label="清空日志" title="清空日志"><Trash2 size={15} /></button></div></div>{verification && <LoginVerificationCard verification={verification} onRetry={async () => { try { await onCommand(selectedBot, `-q ${selectedBot.qq}`, botLogs); onNotice('已重新尝试登录，请等待二维码或登录结果') } catch (error) { onNotice(`重新登录失败：${error.message}`) } }} onNotice={onNotice} />}<div className="activity-feed" ref={feedRef} onScroll={() => { const feed = feedRef.current; if (feed) followLogsRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 24 }}>{visibleLogs.length ? visibleLogs.map((log, index) => { const qrKey = `${log.time}-${log.source}-${index}`; return <LogItem key={qrKey} log={log} qrVisible={visibleQrKey === qrKey} onToggleQr={() => setVisibleQrKey(visibleQrKey === qrKey ? '' : qrKey)} /> }) : <div className="activity-empty">暂无日志</div>}</div><div className="command-box"><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="输入 -q 2 快速登录…" onKeyDown={(event) => { if (event.key === 'Enter') submitCommand() }} /><button onClick={submitCommand} aria-label="发送"><Play size={14} /></button></div></div>
            </> : <AccountConfig bot={selectedBot} onSavePassword={onSavePassword} onSavePort={onSavePort} onSaveNapcatPort={onSaveNapcatPort} onSaveFramework={onSaveFramework} onOpenWebUi={onOpenWebUi} onNotice={onNotice} />}
         </div>
@@ -1227,7 +1245,30 @@ function AccountListItem({ bot, selected, onClick }) {
   const running = isBotRunning(bot)
   const transitioning = isBotTransitioning(bot)
   const framework = bot.framework_label || (bot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')
-  return <button className={`account-list-item ${selected ? 'selected' : ''}`} onClick={onClick}><BotAvatar bot={bot} className="list-avatar" /><div className="list-item-copy"><strong>{bot.name}</strong><span>{bot.qq} · {framework}</span></div><div className={`list-status ${running ? 'green' : transitioning ? 'blue' : ''}`}><i />{botStatusLabel(bot)}</div></button>
+  return <button className={`account-list-item ${selected ? 'selected' : ''}`} onClick={onClick}><BotAvatar bot={bot} className="list-avatar" /><div className="list-item-copy"><strong>{bot.name}</strong><span>{bot.qq} · {framework}</span><BotUptime bot={bot} /></div><div className={`list-status ${running ? 'green' : transitioning ? 'blue' : ''}`}><i />{botStatusLabel(bot)}</div></button>
+}
+
+function BotUptime({ bot, className = '' }) {
+  const running = isBotRunning(bot)
+  const transitioning = isBotTransitioning(bot)
+  const [now, setNow] = useState(() => Date.now())
+  const anchorRef = useRef({ seconds: Number(bot.uptime_seconds || 0), syncedAt: Date.now() })
+
+  useEffect(() => {
+    anchorRef.current = { seconds: Number(bot.uptime_seconds || 0), syncedAt: Date.now() }
+  }, [bot.id, bot.status, bot.uptime_seconds])
+
+  useEffect(() => {
+    if (!running) return undefined
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [running])
+
+  const liveSeconds = running
+    ? Math.max(0, anchorRef.current.seconds + Math.floor((now - anchorRef.current.syncedAt) / 1000))
+    : 0
+  const label = running ? `持续运行 ${formatUptime(liveSeconds)}` : transitioning ? '等待启动' : '未运行'
+  return <small className={`bot-uptime ${running ? 'running' : ''} ${className}`.trim()}>{label}</small>
 }
 
 function BotAvatar({ bot, className = '' }) {
@@ -1248,136 +1289,6 @@ function EmptyDetail({ onCreate }) {
 
 function StatusPill({ label, state }) {
   return <span className={`status-pill ${state}`}><i />{label}</span>
-}
-
-function cleanLogMessage(message) {
-  return String(message || '').replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\[\d+(?:;\d+)*m/g, '')
-}
-
-function isQrArt(message) {
-  const cleaned = cleanLogMessage(message)
-  return cleaned.length >= 12 && /[█▀▄]/.test(cleaned) && cleaned.replace(/[█▀▄\s]/g, '') === ''
-}
-
-function compactLogMessage(message, source) {
-  const prefixRemoved = message.replace(/^\s*(?:\d{2}-\d{2}\s+)?\d{2}:\d{2}:\d{2}\s+\[[^\]]+\]\s*/, '')
-  const sourcePrefix = source ? new RegExp(`^${String(source).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\|\\s*`, 'i') : null
-  return prefixRemoved.replace(sourcePrefix || /^$/, '').trim()
-}
-
-function findImageTokenEnd(message, start) {
-  let depth = 0
-  for (let index = start; index < message.length; index += 1) {
-    if (message[index] === '[') depth += 1
-    if (message[index] !== ']') continue
-    depth -= 1
-    if (depth === 0) return index + 1
-  }
-  return -1
-}
-
-function parseImageToken(token) {
-  const fields = {}
-  const body = token.slice('[image:'.length, -1)
-  const matcher = /(?:^|,)\s*([a-z_]+)=([\s\S]*?)(?=,\s*[a-z_]+=|$)/gi
-  let match
-  while ((match = matcher.exec(body))) fields[match[1].toLowerCase()] = match[2].trim()
-  if (!/^https?:\/\//i.test(fields.url || '')) return null
-  return {
-    url: fields.url,
-    file: fields.file || 'qq-image',
-    summary: fields.summary || '图片消息',
-    size: fields.file_size || '',
-    truncated: /\.\.\.$/.test(fields.url),
-  }
-}
-
-function parseLogSegments(message) {
-  const text = String(message || '')
-  const segments = []
-  let cursor = 0
-  while (cursor < text.length) {
-    const start = text.indexOf('[image:', cursor)
-    if (start < 0) break
-    const end = findImageTokenEnd(text, start)
-    if (end < 0) break
-    if (start > cursor) segments.push({ type: 'text', value: text.slice(cursor, start) })
-    const image = parseImageToken(text.slice(start, end))
-    if (image) segments.push({ type: 'image', value: image })
-    else segments.push({ type: 'text', value: text.slice(start, end) })
-    cursor = end
-  }
-  if (cursor < text.length) segments.push({ type: 'text', value: text.slice(cursor) })
-  return segments.length ? segments : [{ type: 'text', value: text }]
-}
-
-function isRedundantLog(message) {
-  const normalized = message.replace(/\s+/g, ' ').trim()
-  return !normalized
-    || /^\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+\[(?:trace|debug|info|notice|success|warn|warning|error|critical|fatal)\]\s*$/i.test(normalized)
-    || /二维码已保存到|二维码解码URL|如果控制台二维码无法扫码|请扫描下面的二维码/.test(normalized)
-    || /^\d+\.\d+\s+\S+$/.test(normalized)
-}
-
-function isNapcatMessageLog(log) {
-  const message = compactLogMessage(cleanLogMessage(log?.message), log?.source)
-  return /(?:接收\s*<-|发送\s*->)\s*/.test(message)
-}
-
-function prepareLogItems(logs) {
-  const prepared = []
-  const seen = new Set()
-  for (let index = 0; index < logs.length; index += 1) {
-    if (isNapcatMessageLog(logs[index])) continue
-    const rawMessage = cleanLogMessage(logs[index].message)
-    const message = compactLogMessage(rawMessage, logs[index].source)
-    if (!isQrArt(message)) {
-      if (isRedundantLog(rawMessage)) continue
-      const key = `${logs[index].time}|${logs[index].source}|${rawMessage}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      const detectedLevel = rawMessage.match(/\[(trace|debug|info|notice|success|warn|warning|error|critical|fatal)\]/i)?.[1]
-      prepared.push({ ...logs[index], level: detectedLevel || logs[index].level, message })
-      continue
-    }
-
-    const qrLines = [message]
-    while (index + 1 < logs.length && isQrArt(logs[index + 1].message)) {
-      index += 1
-      qrLines.push(cleanLogMessage(logs[index].message))
-    }
-    prepared.push({ ...logs[index], kind: 'qr', message: qrLines.join('\n') })
-  }
-  return prepared
-}
-
-function normalizeLogLevel(level, message) {
-  const rawLevel = String(level || '').toLowerCase()
-  const detectedLevel = String(message || '').match(/\[(trace|debug|info|notice|success|warn|warning|error|critical|fatal)\]/i)?.[1]
-  const normalized = (rawLevel && rawLevel !== 'info' ? rawLevel : detectedLevel || rawLevel || 'info').toLowerCase()
-  if (normalized === 'warning') return 'warn'
-  if (normalized === 'critical' || normalized === 'fatal') return 'error'
-  if (normalized === 'success' || normalized === 'debug' || normalized === 'warn' || normalized === 'error') return normalized
-  return 'info'
-}
-
-function findLoginVerification(logs, source) {
-  const candidates = [...logs].reverse().filter((log) => !source || log.source === source)
-  const challengeIndex = candidates.findIndex((log) => /proofWaterUrl|需要验证码|密码回退需要验证码|安全验证/.test(cleanLogMessage(log.message)))
-  if (challengeIndex < 0) return null
-
-  // The array is newest-first here. A later login-success event means the
-  // challenge has already been handled, so do not keep showing a stale card.
-  const recoveredIndex = candidates.findIndex((log) => /登录成功|登录完成|安全验证成功|二维码登录成功|登录状态.*(?:在线|成功)|账号.*(?:上线|登录成功)|(?:OneBot|NapCat).*连接成功/i.test(cleanLogMessage(log.message)))
-  if (recoveredIndex >= 0 && recoveredIndex < challengeIndex) return null
-
-  const challenge = candidates[challengeIndex]
-  if (!challenge) return null
-  const text = cleanLogMessage(challenge.message)
-  const proofUrl = text.match(/(?:proofWaterUrl|验证[:：])\s*(https?:\/\/[^\s]+)/i)?.[1]?.replace(/[),.;]+$/, '') || ''
-  const webuiLog = candidates.find((log) => /WebUI User Panel Url:\s*https?:\/\//i.test(cleanLogMessage(log.message)))
-  const webuiUrl = cleanLogMessage(webuiLog?.message || '').match(/https?:\/\/[^\s]+\/webui\?token=[^\s]+/i)?.[0]?.replace(/[),.;]+$/, '') || ''
-  return { proofUrl, webuiUrl: normalizeLocalUrl(webuiUrl), challengeTime: challenge.time }
 }
 
 function LoginVerificationCard({ verification, onRetry, onNotice }) {
@@ -1417,7 +1328,7 @@ function renderLogText(message, prefix = '') {
 }
 
 function ImageMessage({ image }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)
   const [failed, setFailed] = useState(false)
   const filename = image.file || 'qq-image'
   const cachePath = `/api/media/cache?file=${encodeURIComponent(filename)}`
@@ -1450,7 +1361,8 @@ function renderLogMessage(message) {
 
 function LogItem({ log, qrVisible, onToggleQr }) {
   const level = normalizeLogLevel(log.level, log.message)
-  return <div className={`log-item ${log.kind === 'qr' ? 'qr-log-item' : ''}`}><div className={`log-dot ${level}`} /><div className="log-copy">{log.kind === 'qr' ? <><div className="log-meta"><time>{log.time}</time><strong>[{log.source}]</strong></div>{qrVisible ? <div className="qr-card"><AuthenticatedQr time={log.time} /><span>使用手机 QQ 扫描此二维码登录</span><button type="button" className="qr-reveal" onClick={onToggleQr}>隐藏二维码</button></div> : <button type="button" className="qr-reveal" onClick={onToggleQr}>登录二维码已就绪 · 点击显示</button>}</> : <div className="log-line"><time>{log.time}</time><strong>[{log.source}]</strong><span className={`log-level-${level}`}>{renderLogMessage(log.message)}</span></div>}</div></div>
+  const multiline = String(log.message || '').includes('\n')
+  return <div className={`log-item ${log.kind === 'qr' ? 'qr-log-item' : ''}`}><div className={`log-dot ${level}`} /><div className="log-copy">{log.kind === 'qr' ? <><div className="log-meta"><time>{log.time}</time><strong>[{log.source}]</strong></div>{qrVisible ? <div className="qr-card"><AuthenticatedQr time={log.time} /><span>使用手机 QQ 扫描此二维码登录</span><button type="button" className="qr-reveal" onClick={onToggleQr}>隐藏二维码</button></div> : <button type="button" className="qr-reveal" onClick={onToggleQr}>登录二维码已就绪 · 点击显示</button>}</> : <div className="log-line"><time>{log.time}</time><strong>[{log.source}]</strong><span className={`log-level-${level}${multiline ? ' log-multiline' : ''}`}>{renderLogMessage(log.message)}</span></div>}</div></div>
 }
 
 function AuthenticatedQr({ time }) {
@@ -1473,7 +1385,7 @@ function ResourcePage({ kind, resource, setup, onOpenSetup, onSelect, onRefresh,
   const statusDescription = unavailable ? '暂时无法读取本机资源状态，请检查管理服务连接。' : valid ? '控制台可以使用该资源启动 Bot。' : installerReady && isNapCat ? '已找到 NapCatInstaller.exe，一键配置会先执行 OneKey；QQ 下载失败时会切换官方 Shell 版。' : missing === 'qq' ? '已找到 NapCat 启动器，但暂未检测到 QQ.exe。官方 Shell 版会使用本机已安装的 QQ，请先安装 QQ 或选择完整目录。' : `请选择本机已有的 ${title} 目录，或打开官方页面下载。`
   const pathLabel = unavailable ? '等待管理 API' : resource.path || '尚未选择目录'
   const pathState = unavailable ? '状态未知' : valid ? '路径有效' : installerReady ? '等待安装器部署' : missing === 'qq' ? '缺少 QQ.exe' : '路径无效或不存在'
-  return <section className="resource-page"><div className="resource-page-header"><div><button className="resource-back" onClick={onBack}><RotateCcw size={14} />返回 QQ 账号</button><div className="eyebrow">运行资源</div><h1>{title}</h1><p>{description}</p></div><div className="resource-page-actions"><button className="action-button" onClick={onOpenSetup} disabled={unavailable}><Download size={15} />{setup?.status === 'running' ? '查看配置进度' : '一键配置'}</button><button className="plain-icon" onClick={onRefresh} aria-label="刷新资源状态"><RefreshCw size={16} /></button></div></div><div className={`resource-status-card ${valid ? 'ready' : unavailable ? 'unavailable' : 'missing'}`}><div className="resource-status-icon">{valid ? <Check size={22} /> : <FolderOpen size={22} />}</div><div><strong>{statusTitle}</strong><span>{statusDescription}</span></div><span className="resource-status-pill">{unavailable ? '状态未知' : valid ? '已就绪' : '待设置'}</span></div><section className="resource-card"><div className="resource-card-heading"><div><h2>资源目录</h2><p>控制台会从此目录读取并启动 {title}。</p></div><span className="resource-path-state">{pathState}</span></div><div className="resource-path"><FolderOpen size={16} /><span title={pathLabel}>{pathLabel}</span></div><div className="resource-actions"><button className="secondary" onClick={() => onSelect(kind)} disabled={unavailable}><FolderOpen size={15} />选择本地目录</button><button className="secondary" onClick={() => officialUrl && openExternal(officialUrl)}><Download size={15} />打开官方获取页<ExternalLink size={13} /></button></div></section><section className="resource-help"><strong>首次使用建议</strong><p>{isNapCat ? 'NapCat 会连接已选择的机器人框架；OneBot 反向 WS 地址会根据框架自动配置。' : '一键配置会安装并校验该机器人框架。选择 AstrBot 时，每个 QQ 账号会使用独立的数据和配置目录。'}</p></section></section>
+  return <section className="resource-page"><div className="resource-page-header"><div><button className="resource-back" onClick={onBack}><RotateCcw size={14} />返回上一页</button><div className="eyebrow">运行资源</div><h1>{title}</h1><p>{description}</p></div><div className="resource-page-actions"><button className="action-button" onClick={onOpenSetup} disabled={unavailable}><Download size={15} />{setup?.status === 'running' ? '查看配置进度' : '一键配置'}</button><button className="plain-icon" onClick={onRefresh} aria-label="刷新资源状态"><RefreshCw size={16} /></button></div></div><div className={`resource-status-card ${valid ? 'ready' : unavailable ? 'unavailable' : 'missing'}`}><div className="resource-status-icon">{valid ? <Check size={22} /> : <FolderOpen size={22} />}</div><div><strong>{statusTitle}</strong><span>{statusDescription}</span></div><span className="resource-status-pill">{unavailable ? '状态未知' : valid ? '已就绪' : '待设置'}</span></div><section className="resource-card"><div className="resource-card-heading"><div><h2>资源目录</h2><p>控制台会从此目录读取并启动 {title}。</p></div><span className="resource-path-state">{pathState}</span></div><div className="resource-path"><FolderOpen size={16} /><span title={pathLabel}>{pathLabel}</span></div><div className="resource-actions"><button className="secondary" onClick={() => onSelect(kind)} disabled={unavailable}><FolderOpen size={15} />选择本地目录</button><button className="secondary" onClick={() => officialUrl && openExternal(officialUrl)}><Download size={15} />打开官方获取页<ExternalLink size={13} /></button></div></section><section className="resource-help"><strong>首次使用建议</strong><p>{isNapCat ? 'NapCat 会连接已选择的机器人框架；OneBot 反向 WS 地址会根据框架自动配置。' : '一键配置会安装并校验该机器人框架。选择 AstrBot 时，每个 QQ 账号会使用独立的数据和配置目录。'}</p></section></section>
 }
 
 function ResourceSetupModal({ resources, setup, onSetup, onSelect, onRefresh, onClose }) {
@@ -1518,44 +1430,162 @@ function ResourceSetupModal({ resources, setup, onSetup, onSelect, onRefresh, on
   return <div className="modal-backdrop resource-setup-backdrop"><section className="resource-setup-modal" role="dialog" aria-modal="true" aria-labelledby="resource-setup-title"><div className="modal-header"><div><div className="eyebrow">首次启动设置</div><h2 id="resource-setup-title">准备运行资源</h2><p>按官方流程完成下载、安装、环境配置、协议配置和校验。</p></div><div className="resource-setup-header-actions"><button className="action-button" onClick={() => onSetup(selectedKinds)} disabled={setupRunning || !selectedKinds.length}><Download size={15} />{setupRunning ? '配置中…' : setupStarted ? '重新配置' : '一键配置'}</button><button className="plain-icon resource-setup-refresh" onClick={onRefresh} aria-label="刷新资源状态" title="刷新资源状态"><RefreshCw size={18} /></button><button className="plain-icon resource-setup-close" onClick={onClose} aria-label="收起弹窗" title="收起"><X size={17} /></button></div></div><div className="resource-setup-list">{items.map(({ kind, label, resource, file, required, unavailable, description }) => { const selected = selectedKinds.includes(kind); return <div className={`resource-setup-item setup-option ${selected ? 'selected' : ''} ${unavailable ? 'unavailable' : ''}`} key={kind}><label className="resource-setup-choice"><input type="checkbox" checked={selected} disabled={required || unavailable || setupRunning} onChange={() => toggleKind(kind)} /><span className="resource-setup-check" aria-hidden="true">{selected && <Check size={13} />}</span></label><div className={`resource-setup-icon ${resource?.valid ? 'ready' : ''}`}><FolderOpen size={18} /></div><div className="resource-setup-copy"><strong>{label}<em>{required ? '默认' : unavailable ? '暂未接入' : '可选'}</em></strong><span>{resource?.valid ? '已检测到有效目录，执行时会跳过下载并重新校验配置' : resource?.installer_exists ? '已找到 NapCatInstaller.exe，配置会先下载并部署内置 QQ' : resource?.missing === 'qq' ? '已找到启动器，但缺少 QQ.exe，配置会重新执行官方安装器' : unavailable ? description : `${description} 需要包含 ${file}`}</span><small>{resource?.path || (unavailable ? '暂不参与本次配置' : '尚未配置')}</small></div>{!unavailable && <div className="resource-setup-actions"><button className="secondary" onClick={() => onSelect(kind)} disabled={setupRunning}>选择目录</button></div>}</div> })}</div>{setupStarted && <div className={`resource-setup-progress workflow-panel ${setup.status}`}><div className="resource-setup-progress-heading"><strong>{workflowTitle}</strong><span>{Math.round(setup.progress || 0)}%</span></div>{setup.status === 'running' && <p className="resource-current-task">当前任务：{currentTask || setup.step || '准备中'}</p>}<div className="resource-progress-track"><i style={{ width: `${Math.max(0, Math.min(100, setup.progress || 0))}%` }} /></div><div className="resource-task-list">{workflowTasks.map((task) => <div className={`resource-task-item ${task.status}`} key={task.kind}><div className="resource-task-status" aria-hidden="true">{task.status === 'succeeded' ? <Check size={14} /> : task.status === 'failed' ? <X size={14} /> : task.status === 'running' ? <RefreshCw size={14} /> : <MoreHorizontal size={14} />}</div><div className="resource-task-copy"><strong>{task.label}</strong><span>{task.message || statusLabels[task.status] || '等待执行'}</span>{Array.isArray(task.steps) && <div className="resource-task-steps">{task.steps.map((step) => <span className={step.status} key={step.id}><i />{step.label}<small>{stepStatusLabels[step.status] || step.status}</small></span>)}</div>}</div><span className="resource-task-state">{statusLabels[task.status] || task.status} · {Math.round(task.progress || 0)}%</span></div>)}</div>{setup.message && setup.status !== 'running' && <p className="resource-setup-summary">{setup.message}</p>}{setup.error && <div className="resource-setup-error"><p>{setup.error}</p>{setup.installer_log_url && <button className="resource-log-download" onClick={downloadInstallerLog} disabled={logDownloading}><FileText size={13} />{logDownloading ? '日志下载中…' : '下载安装器日志'}</button>}</div>}</div>}<div className="resource-setup-note">NoneBot、AstrBot 和 NapCat 可分别选择；AstrBot 会为每个账号生成独立的 data/cmd_config.json，NapCat 会按框架写入反向 WS 地址。安装器输出会保存为 napcat-installer.log。</div></section></div>
 }
 
-function SettingsPage({ theme, onThemeChange, onBack, onNotice }) {
+function SettingsPage({ theme, themePackage, font, preferences, online, onThemeChange, onThemePackageChange, onFontChange, onPreferenceChange, onBack, onNavigate, onRefresh, onNotice }) {
   const [section, setSection] = useState('外观')
-  const sections = [
-    { title: '个人', items: [{ label: '常规', icon: Settings }, { label: '个人资料', icon: CircleUserRound }, { label: '外观', icon: Palette }, { label: '快捷键', icon: Keyboard }] },
-    { title: '应用', items: [{ label: '通知', icon: Bell }, { label: '服务', icon: Server }] },
-  ]
+  const [search, setSearch] = useState('')
+  const query = search.trim().toLowerCase()
+  const filteredSections = query
+    ? SETTINGS_SECTIONS.map((group) => ({ ...group, items: group.items.filter((item) => item.label.toLowerCase().includes(query)) })).filter((group) => group.items.length)
+    : SETTINGS_SECTIONS
 
-  const chooseSection = (label) => {
-    setSection(label)
-    if (label !== '外观') onNotice(`${label}设置即将开放`)
+  const chooseSection = (label) => setSection(label)
+  const renderContent = () => {
+    if (section === '外观') return <AppearanceSettings theme={theme} font={font} preferences={preferences} onThemeChange={onThemeChange} onFontChange={onFontChange} onPreferenceChange={onPreferenceChange} onNotice={onNotice} />
+    if (section === '常规') return <GeneralSettings preferences={preferences} onPreferenceChange={onPreferenceChange} onNotice={onNotice} />
+    if (section === '个人资料') return <ProfileSettings profileName={preferences.profileName} onProfileNameChange={(value) => onPreferenceChange('profileName', value)} onNotice={onNotice} />
+    if (section === '快捷键') return <ShortcutSettings onNotice={onNotice} />
+    if (section === '通知') return <NotificationSettings preferences={preferences} onPreferenceChange={onPreferenceChange} onNotice={onNotice} />
+    if (section === '主题插件包') return <ThemePackageSettings themePackage={themePackage} onThemePackageChange={onThemePackageChange} onNotice={onNotice} />
+    return <ServiceSettings online={online} onNavigate={onNavigate} onRefresh={onRefresh} />
   }
 
-  return <section className="settings-shell"><aside className="settings-sidebar"><button className="settings-back" onClick={onBack}><ArrowLeft size={15} />返回应用</button><div className="settings-search"><Search size={14} /><input placeholder="搜索设置…" /></div><div className="settings-nav-list">{sections.map((group) => <div className="settings-group" key={group.title}><div className="settings-group-title">{group.title}</div>{group.items.map(({ label, icon: Icon }) => <button key={label} className={`settings-nav-item ${section === label ? 'active' : ''}`} onClick={() => chooseSection(label)}><Icon size={15} /><span>{label}</span></button>)}</div>)}</div></aside><main className="settings-main">{section === '外观' ? <AppearanceSettings theme={theme} onThemeChange={onThemeChange} /> : <div className="settings-empty"><div className="placeholder-icon"><Settings size={21} /></div><h2>{section}</h2><p>这个设置模块已经预留好入口。</p></div>}</main></section>
+  return <section className="settings-shell"><aside className="settings-sidebar"><button className="settings-back" onClick={onBack}><ArrowLeft size={15} />返回上一页</button><div className="settings-search"><Search size={14} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索设置…" aria-label="搜索设置" /></div><div className="settings-nav-list">{filteredSections.length ? filteredSections.map((group) => <div className="settings-group" key={group.title}><div className="settings-group-title">{group.title}</div>{group.items.map(({ label, icon: Icon }) => <button key={label} className={`settings-nav-item ${section === label ? 'active' : ''}`} onClick={() => chooseSection(label)}><Icon size={15} /><span>{label}</span></button>)}</div>) : <div className="settings-search-empty">没有匹配的设置</div>}</div></aside><main className="settings-main">{renderContent()}</main></section>
 }
 
-function AppearanceSettings({ theme, onThemeChange }) {
-  const options = [
+function SettingsRow({ title, description, action }) {
+  return <div className="settings-row"><div className="settings-row-copy"><strong>{title}</strong><span>{description}</span></div>{action}</div>
+}
+
+function SettingsToggle({ checked, onChange, label }) {
+  return <button type="button" className={`settings-toggle ${checked ? 'checked' : ''}`} role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)}><span /></button>
+}
+
+function SettingsPanel({ title, description, children }) {
+  return <section className="settings-panel"><div className="settings-panel-heading"><div><h2>{title}</h2>{description && <p>{description}</p>}</div></div>{children}</section>
+}
+
+function FontSelect({ value, onChange }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef(null)
+  const selected = FONT_OPTIONS.find((option) => option.value === value) || FONT_OPTIONS[0]
+
+  useEffect(() => {
+    if (!open) return undefined
+    const close = (event) => {
+      if (!rootRef.current?.contains(event.target)) setOpen(false)
+    }
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', close)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  const choose = (nextValue) => {
+    onChange(nextValue)
+    setOpen(false)
+  }
+
+  return <div className={`settings-font-select ${open ? 'open' : ''}`} ref={rootRef}><button type="button" className="settings-font-select-trigger" onClick={() => setOpen((current) => !current)} aria-haspopup="listbox" aria-expanded={open} aria-label="界面字体选择"><span className="settings-font-select-copy"><strong>{selected.label}</strong><small>{selected.description}</small></span><ChevronDown size={15} className="settings-font-select-chevron" /></button>{open && <div className="settings-font-select-menu" role="listbox" aria-label="界面字体选项">{FONT_OPTIONS.map((option) => { const isSelected = option.value === selected.value; return <button type="button" className={`settings-font-select-option ${isSelected ? 'selected' : ''}`} role="option" aria-selected={isSelected} key={option.value} onClick={() => choose(option.value)}><span><strong>{option.label}</strong><small>{option.description}</small></span>{isSelected && <Check size={14} />}</button> })}</div>}</div>
+}
+
+function AppearanceSettings({ theme, font, preferences, onThemeChange, onFontChange, onPreferenceChange, onNotice }) {
+  const themeOptions = [
     { value: 'system', label: '系统', icon: Monitor },
     { value: 'light', label: '浅色', icon: Sun },
     { value: 'dark', label: '深色', icon: Moon },
   ]
-  const currentLabel = options.find((option) => option.value === theme)?.label || '系统'
-  return <div className="settings-content"><div className="settings-page-heading"><div className="eyebrow">系统设置</div><h1>外观</h1><p>调整 QQ 控制台的主题和界面显示方式。</p></div><section className="settings-section"><h2>主题</h2><div className="theme-options">{options.map(({ value, label, icon: Icon }) => <button key={value} className={`theme-option ${theme === value ? 'selected' : ''}`} onClick={() => onThemeChange(value)}><div className={`theme-preview theme-preview-${value}`}><div className="theme-preview-top" /><div className="theme-preview-body"><div /><div /><div /></div><Icon size={15} /></div><span>{label}</span>{theme === value && <Check className="theme-option-check" size={14} />}</button>)}</div></section><section className="appearance-card"><div className="appearance-card-heading"><div><h2>{currentLabel}主题</h2><p>当前主题会立即应用，并保存到本机。</p></div><span className="theme-badge"><Palette size={14} />{currentLabel}</span></div><div className="appearance-row"><div><strong>界面字体</strong><span>中文优先使用 HarmonyOS Sans SC</span></div><b>HarmonyOS Sans SC</b></div><div className="appearance-row"><div><strong>布局密度</strong><span>保持当前舒适的桌面布局</span></div><b>舒适</b></div></section></div>
+  const currentTheme = themeOptions.find((option) => option.value === theme) || themeOptions[0]
+  const currentFont = FONT_OPTIONS.find((option) => option.value === font) || FONT_OPTIONS[0]
+  const resetAppearance = () => {
+    onThemeChange('system')
+    onFontChange('system')
+    onPreferenceChange('density', 'comfortable')
+    onPreferenceChange('reduceMotion', false)
+    onNotice('外观设置已恢复默认')
+  }
+
+  return <div className="settings-content"><div className="settings-page-heading"><div className="eyebrow">系统设置</div><h1>外观</h1><p>主题、字体和布局偏好会立即应用，并保存到本机。</p></div><section className="settings-section"><h2>主题</h2><div className="theme-options">{themeOptions.map(({ value, label, icon: Icon }) => <button type="button" key={value} className={`theme-option ${theme === value ? 'selected' : ''}`} onClick={() => onThemeChange(value)}><div className={`theme-preview theme-preview-${value}`}><div className="theme-preview-top" /><div className="theme-preview-body"><div /><div /><div /></div><Icon size={15} /></div><span>{label}</span>{theme === value && <Check className="theme-option-check" size={14} />}</button>)}</div></section><SettingsPanel title="界面字体" description="选择控制台使用的字体，中文和数字会同步更新。"><SettingsRow title="字体" description={currentFont.description} action={<FontSelect value={font} onChange={onFontChange} />} /></SettingsPanel><SettingsPanel title="显示偏好" description="调整信息密度和交互动画。"><SettingsRow title="布局密度" description="紧凑布局可以在同一屏显示更多内容。" action={<div className="settings-segmented"><button type="button" className={preferences.density === 'comfortable' ? 'selected' : ''} onClick={() => onPreferenceChange('density', 'comfortable')}>舒适</button><button type="button" className={preferences.density === 'compact' ? 'selected' : ''} onClick={() => onPreferenceChange('density', 'compact')}>紧凑</button></div>} /><SettingsRow title="减少动效" description="关闭按钮和面板的过渡动画。" action={<SettingsToggle checked={preferences.reduceMotion} onChange={(value) => onPreferenceChange('reduceMotion', value)} label="减少动效" />} /></SettingsPanel><div className="settings-actions"><span><strong>{currentTheme.label} · {currentFont.label}</strong><small>当前外观配置</small></span><button type="button" className="secondary" onClick={resetAppearance}>恢复默认</button></div></div>
+}
+
+function ThemePackageSettings({ themePackage, onThemePackageChange, onNotice }) {
+  const currentPackage = getThemePackage(themePackage)
+  const choosePackage = (id) => {
+    const nextPackage = getThemePackage(id)
+    onThemePackageChange(nextPackage.id)
+    onNotice(`${nextPackage.label}已启用`)
+  }
+  const resetPackage = () => choosePackage(DEFAULT_THEME_PACKAGE.id)
+
+  return <div className="settings-content"><div className="settings-page-heading"><div className="eyebrow">外观扩展</div><h1>主题插件包</h1><p>安装并切换控制台的配色插件包，选择后会立即应用并保存到本机。</p></div><SettingsPanel title="已安装主题包" description="主题插件包只改变颜色和强调色，不会影响账号或服务配置。"><div className="theme-package-grid">{THEME_PACKAGES.map((item) => { const selected = item.id === currentPackage.id; return <button type="button" className={`theme-package-card ${selected ? 'selected' : ''}`} key={item.id} onClick={() => choosePackage(item.id)} aria-pressed={selected}><div className={`theme-package-preview theme-package-preview-${item.id}`}><div className="theme-package-preview-top"><i /><i /><i /></div><div className="theme-package-preview-body"><div className="theme-package-preview-nav" /><div className="theme-package-preview-content"><i /><i /><i /></div></div></div><div className="theme-package-card-copy"><span><strong>{item.label}</strong><small>{item.description}</small></span>{selected && <span className="theme-package-check" aria-label="当前已启用"><Check size={13} /></span>}</div><div className="theme-package-card-meta"><span>{item.version}</span><strong>{selected ? '已启用' : '启用'}</strong></div></button> })}</div></SettingsPanel><div className="settings-note"><Paintbrush size={18} /><span>蓝色主题插件包使用海洋蓝强调色，并兼容系统、浅色和深色模式。</span></div><div className="settings-actions"><span><strong>{currentPackage.label}</strong><small>当前主题插件包</small></span><button type="button" className="secondary" onClick={resetPackage}>恢复默认</button></div></div>
+}
+
+function GeneralSettings({ preferences, onPreferenceChange, onNotice }) {
+  return <div className="settings-content"><div className="settings-page-heading"><div className="eyebrow">系统设置</div><h1>常规</h1><p>控制控制台的启动和数据刷新方式。</p></div><SettingsPanel title="运行方式" description="这些选项只影响本地控制台，不会修改 Bot 配置。"><SettingsRow title="自动刷新状态" description="按固定间隔同步账号、日志和运行资源状态。" action={<SettingsToggle checked={preferences.autoRefresh} onChange={(value) => { onPreferenceChange('autoRefresh', value); onNotice(value ? '已开启自动刷新' : '已关闭自动刷新') }} label="自动刷新状态" />} /><SettingsRow title="本地数据" description="主题、字体和设置偏好保存在当前设备的浏览器存储中。" action={<span className="settings-status-badge"><Check size={13} />已启用</span>} /></SettingsPanel><SettingsPanel title="安全提示" description="管理服务仍通过本机 API 访问，账号密码不会写入这里。"><div className="settings-note"><ShieldCheck size={18} /><span>建议仅在可信设备上使用 QQ 控制台，并定期检查 Bot 的登录状态。</span></div></SettingsPanel><div className="settings-actions"><span><strong>设置已自动保存</strong><small>修改后无需额外点击保存</small></span><button type="button" className="secondary" onClick={() => onNotice('当前设置已保存')}>确认</button></div></div>
+}
+
+function ProfileSettings({ profileName, onProfileNameChange, onNotice }) {
+  const [draftName, setDraftName] = useState(profileName || '管理员')
+  const saveName = () => {
+    const value = draftName.trim() || '管理员'
+    onProfileNameChange(value)
+    setDraftName(value)
+    onNotice('个人资料已保存')
+  }
+
+  return <div className="settings-content"><div className="settings-page-heading"><div className="eyebrow">个人设置</div><h1>个人资料</h1><p>设置本机控制台中显示的称呼。</p></div><SettingsPanel title="显示信息" description="该名称只用于本机界面，不会同步到 QQ 或机器人平台。"><label className="settings-form-field"><span>显示名称</span><input value={draftName} maxLength={32} onChange={(event) => setDraftName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveName() }} placeholder="例如：管理员" /><small>最多 32 个字符。</small></label><div className="settings-actions inline"><span><strong>{draftName.trim() || '管理员'}</strong><small>预览名称</small></span><button type="button" className="action-button" onClick={saveName}>保存资料</button></div></SettingsPanel></div>
+}
+
+function ShortcutSettings({ onNotice }) {
+  const shortcuts = [
+    ['打开设置', 'Ctrl / ⌘ + ,'],
+    ['刷新状态', 'Ctrl / ⌘ + R'],
+    ['关闭弹窗', 'Esc'],
+    ['切换账号搜索', 'Ctrl / ⌘ + K'],
+  ]
+  return <div className="settings-content"><div className="settings-page-heading"><div className="eyebrow">个人设置</div><h1>快捷键</h1><p>常用操作的默认快捷键，桌面端会优先响应这些组合键。</p></div><SettingsPanel title="默认快捷键" description="快捷键展示与桌面壳保持一致。"><div className="shortcut-list">{shortcuts.map(([label, key]) => <div className="shortcut-row" key={label}><span>{label}</span><kbd>{key}</kbd></div>)}</div></SettingsPanel><div className="settings-actions"><span><strong>默认快捷键</strong><small>当前版本暂不支持自定义组合键</small></span><button type="button" className="secondary" onClick={() => onNotice('快捷键已是默认配置')}>恢复默认</button></div></div>
+}
+
+function NotificationSettings({ preferences, onPreferenceChange, onNotice }) {
+  return <div className="settings-content"><div className="settings-page-heading"><div className="eyebrow">应用设置</div><h1>通知</h1><p>管理 GitHub 更新通知和控制台提醒。</p></div><SettingsPanel title="通知中心" description="关闭后将暂停远程通知同步，并隐藏顶部未读提示。"><SettingsRow title="显示更新通知" description="在顶部通知按钮中显示新的控制台更新。" action={<SettingsToggle checked={preferences.notificationsEnabled} onChange={(value) => { onPreferenceChange('notificationsEnabled', value); onNotice(value ? '已开启更新通知' : '已关闭更新通知') }} label="显示更新通知" />} /><SettingsRow title="通知提示音" description="桌面壳支持时播放提示音，浏览器预览不会自动播放声音。" action={<SettingsToggle checked={preferences.notificationSound} onChange={(value) => onPreferenceChange('notificationSound', value)} label="通知提示音" />} /></SettingsPanel><div className="settings-note"><Volume2 size={18} /><span>通知内容只保存最近 50 条，并会随本机设置一起保存在浏览器存储中。</span></div></div>
+}
+
+function ServiceSettings({ online, onNavigate, onRefresh }) {
+  const resources = [['NapCat', Server], ['NoneBot', SquareTerminal], ['AstrBot', Bot]]
+  return <div className="settings-content"><div className="settings-page-heading"><div className="eyebrow">应用设置</div><h1>服务</h1><p>查看管理服务连接状态，并快速打开运行资源配置。</p></div><SettingsPanel title="管理服务" description="控制台会从本机管理 API 读取状态。"><SettingsRow title="管理 API" description="本机 6700 端口的后台服务。" action={<span className={`settings-status-badge ${online ? 'online' : ''}`}><i />{online ? '连接正常' : '等待连接'}</span>} /><div className="settings-actions inline"><span><strong>{online ? '服务在线' : '服务离线'}</strong><small>重新读取账号与资源状态</small></span><button type="button" className="secondary" onClick={onRefresh}><RefreshCw size={14} />刷新状态</button></div></SettingsPanel><SettingsPanel title="运行资源" description="进入对应资源页面可以选择目录或执行一键配置。"><div className="service-entry-list">{resources.map(([label, Icon]) => <button type="button" className="service-entry" key={label} onClick={() => onNavigate(label)}><span className="service-entry-icon"><Icon size={16} /></span><span><strong>{label}</strong><small>打开资源配置</small></span><ChevronRight size={15} /></button>)}</div></SettingsPanel></div>
 }
 
 function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, refresh, busy, action, onSelectBot }) {
   const [period, setPeriod] = useState('day')
+  const [chartMode, setChartMode] = useState('daily')
+  const [intradayDay, setIntradayDay] = useState('')
   const [botPage, setBotPage] = useState(1)
   const [hoveredChartIndex, setHoveredChartIndex] = useState(null)
+  const chartPlotRef = useRef(null)
+  const chartHoverRatioRef = useRef(null)
   const runningBots = bots.filter((bot) => isBotRunning(bot))
   const frameworkNames = [...new Set(bots.map((bot) => bot.framework_label || (bot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')))]
   const periodStats = stats?.periods?.[period] || { received: 0, sent: 0, total: 0, groups: 0, private: 0, media: 0, commands: 0, active_days: 0 }
   const periodBots = stats?.bots?.[period] || []
-  const series = stats?.series || []
-  const chartSeries = series.length ? series : Array.from({ length: 14 }, (_, index) => ({ day: `empty-${index}`, received: 0, sent: 0 }))
+  const dailySeries = stats?.series || []
+  const intradayByDay = stats?.intraday_by_day || {}
+  const defaultIntradayDay = dailySeries[dailySeries.length - 1]?.day || ''
+  const selectedIntradayDay = intradayDay || defaultIntradayDay
+  const intradaySeries = intradayByDay[selectedIntradayDay] || (selectedIntradayDay === defaultIntradayDay ? stats?.intraday || [] : [])
+  const showIntraday = period === 'day' && chartMode === 'intraday'
+  const selectedSeries = showIntraday ? intradaySeries : dailySeries
+  const emptySeries = showIntraday
+    ? Array.from({ length: 24 }, (_, index) => ({ time: `${String(index).padStart(2, '0')}:00`, received: 0, sent: 0 }))
+    : Array.from({ length: 14 }, (_, index) => ({ day: `empty-${index}`, received: 0, sent: 0 }))
+  const chartSeries = selectedSeries.length ? selectedSeries : emptySeries
   const maxDaily = Math.max(1, ...chartSeries.map((item) => Math.max(Number(item.received || 0), Number(item.sent || 0))))
   const hasSeriesData = chartSeries.some((item) => Number(item.received || 0) > 0 || Number(item.sent || 0) > 0)
-  const chartScale = hasSeriesData ? Math.max(100, Math.ceil(maxDaily / 100) * 100) : 80
+  const chartScaleStep = showIntraday ? 10 : 100
+  const chartScale = hasSeriesData ? Math.max(chartScaleStep, Math.ceil(maxDaily / chartScaleStep) * chartScaleStep) : 80
   const chartLabels = hasSeriesData ? [chartScale, chartScale * .75, chartScale * .5, chartScale * .25, 0] : [80, 60, 40, 20, 0]
   const chartPointPosition = (item, index, key) => {
     const x = chartSeries.length === 1 ? 50 : index / (chartSeries.length - 1) * 100
@@ -1567,10 +1597,11 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, re
     const { x, y } = chartPointPosition(item, index, key)
     return `${x},${y}`
   }).join(' ')
-  const chartDayLabel = (day) => {
-    const value = String(day || '')
-    return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value.slice(5) : value
+  const chartLabel = (item) => {
+    const value = String(item?.time || item?.day || '')
+    return item?.time || (/^\d{4}-\d{2}-\d{2}$/.test(value) ? value.slice(5) : value)
   }
+  const chartTooltipLabel = (item) => item?.last_at || chartLabel(item)
   const hoveredChartItem = hoveredChartIndex === null ? null : chartSeries[hoveredChartIndex]
   const hoveredChartPosition = hoveredChartItem
     ? chartPointPosition(hoveredChartItem, hoveredChartIndex, 'received')
@@ -1581,24 +1612,56 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, re
   const chartTooltipY = hoveredChartPosition && hoveredSentPosition
     ? Math.max(22, Math.min(hoveredChartPosition.y, hoveredSentPosition.y))
     : 0
+  const setChartHoverPosition = (ratio) => {
+    chartHoverRatioRef.current = ratio
+    chartPlotRef.current?.style.setProperty('--chart-hover-x', `${ratio * 100}%`)
+  }
   const handleChartMouseMove = (event) => {
     if (!hasSeriesData || !chartSeries.length) return
     const bounds = event.currentTarget.getBoundingClientRect()
     const ratio = bounds.width ? Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width)) : 0
     const nextIndex = chartSeries.length === 1 ? 0 : Math.round(ratio * (chartSeries.length - 1))
+    setChartHoverPosition(ratio)
     setHoveredChartIndex((current) => current === nextIndex ? current : nextIndex)
   }
+  const handleChartWheel = (event) => {
+    if (period !== 'day') return
+    if (!event.deltaY) return
+    if (!showIntraday && event.deltaY < 0) return
+    if (showIntraday && event.deltaY > 0) return
+    const nextDay = hoveredChartItem?.day
+    if (!showIntraday && !/^\d{4}-\d{2}-\d{2}$/.test(String(nextDay || ''))) return
+    const scrollContainer = event.currentTarget.closest('.runtime-page')
+    const previousScrollTop = scrollContainer?.scrollTop ?? 0
+    event.preventDefault()
+    if (showIntraday) {
+      setChartMode('daily')
+    } else {
+      setIntradayDay(nextDay)
+      setChartMode('intraday')
+    }
+    const restoreScrollPosition = () => {
+      if (scrollContainer) scrollContainer.scrollTop = previousScrollTop
+    }
+    window.requestAnimationFrame(restoreScrollPosition)
+    window.setTimeout(restoreScrollPosition, 0)
+  }
   const periodLabel = period === 'day' ? '今日' : period === 'week' ? '本周' : '本月'
-  const total = Number(periodStats.total || 0)
-  const received = Number(periodStats.received || 0)
-  const sent = Number(periodStats.sent || 0)
+  const dashboardTotal = Number(periodStats.total || 0)
+  const overviewStats = showIntraday
+    ? dailySeries.find((item) => item.day === selectedIntradayDay) || periodStats
+    : periodStats
+  const overviewPeriodLabel = showIntraday && selectedIntradayDay ? chartLabel({ day: selectedIntradayDay }) : periodLabel
+  const total = Number(overviewStats.total || 0)
+  const received = Number(overviewStats.received || 0)
+  const sent = Number(overviewStats.sent || 0)
   const receivedShare = total ? Math.round(received / total * 100) : 0
   const sentShare = total ? Math.round(sent / total * 100) : 0
   const media = Number(periodStats.media || 0)
   const mediaShare = total ? Math.round(media / total * 100) : 0
-  const yesterdaySeries = chartSeries.length > 1 ? chartSeries[chartSeries.length - 2] : null
+  const yesterdaySeries = dailySeries.length > 1 ? dailySeries[dailySeries.length - 2] : null
   const yesterdayTotal = yesterdaySeries ? Number(yesterdaySeries.received || 0) + Number(yesterdaySeries.sent || 0) : 0
-  const dailyChange = yesterdayTotal ? Math.round((total - yesterdayTotal) / yesterdayTotal * 100) : null
+  const dailyChange = yesterdayTotal ? Math.round((dashboardTotal - yesterdayTotal) / yesterdayTotal * 100) : null
   const botStats = new Map(periodBots.map((item) => [String(item.id), item]))
   const firstBot = bots[0]
   const memoryTotal = Number(system.memory_total || 0)
@@ -1608,43 +1671,49 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, refreshing, re
   const pageSize = 3
   const pageCount = Math.max(1, Math.ceil(bots.length / pageSize))
   const visibleBots = bots.slice((botPage - 1) * pageSize, botPage * pageSize)
-  const uptime = (seconds) => {
-    const totalSeconds = Math.max(0, Number(seconds || 0))
-    if (!totalSeconds) return '—'
-    const hours = Math.floor(totalSeconds / 3600)
-    const minutes = Math.floor((totalSeconds % 3600) / 60)
-    return hours ? `${hours}小时 ${minutes}分` : `${Math.max(1, minutes)}分钟`
-  }
   useEffect(() => {
     setBotPage((page) => Math.min(page, pageCount))
   }, [pageCount])
   useEffect(() => {
-    setHoveredChartIndex(null)
+    const ratio = chartHoverRatioRef.current
+    if (!hasSeriesData || ratio === null || !chartSeries.length) {
+      setHoveredChartIndex(null)
+      return
+    }
+    setChartHoverPosition(ratio)
+    const nextIndex = chartSeries.length === 1 ? 0 : Math.round(ratio * (chartSeries.length - 1))
+    setHoveredChartIndex((current) => current === nextIndex ? current : nextIndex)
+  }, [period, chartMode, intradayDay, chartSeries.length, hasSeriesData])
+  useEffect(() => {
+    if (period !== 'day') {
+      setChartMode('daily')
+      setIntradayDay('')
+    }
   }, [period])
   return <section className="runtime-page">
     <div className="runtime-metrics">
       <div className="runtime-metric"><div className="runtime-metric-icon purple"><Bot size={19} /></div><div><span>在线 Bot</span><strong>{runningBots.length}<small> / {bots.length}</small></strong><em>全部在线</em></div></div>
-      <div className="runtime-metric"><div className="runtime-metric-icon green"><MessageSquare size={19} /></div><div><span>今日消息</span><strong>{total.toLocaleString()} <small>条</small></strong><em className={dailyChange !== null && dailyChange >= 0 ? 'positive' : ''}>{dailyChange === null ? '较昨日暂无数据' : `较昨日 ${dailyChange >= 0 ? '↑' : '↓'} ${Math.abs(dailyChange)}%`}</em></div></div>
+      <div className="runtime-metric"><div className="runtime-metric-icon green"><MessageSquare size={19} /></div><div><span>今日消息</span><strong>{dashboardTotal.toLocaleString()} <small>条</small></strong><em className={dailyChange !== null && dailyChange >= 0 ? 'positive' : ''}>{dailyChange === null ? '较昨日暂无数据' : `较昨日 ${dailyChange >= 0 ? '↑' : '↓'} ${Math.abs(dailyChange)}%`}</em></div></div>
       <div className="runtime-metric"><div className="runtime-metric-icon blue"><Cpu size={17} /></div><div><span>CPU 使用率</span><strong>{online ? `${Math.round(system.cpu ?? 0)}%` : '—'}</strong><em>负载良好</em></div></div>
       <div className="runtime-metric"><div className="runtime-metric-icon orange"><Database size={17} /></div><div><span>内存使用率</span><strong>{online ? `${Math.round(system.memory ?? 0)}%` : '—'}</strong><em>{memoryText}</em></div></div>
     </div>
 
     <section className="runtime-section runtime-stats-section">
-      <div className="runtime-section-heading runtime-stats-heading"><div><h2>消息趋势 <button className="runtime-info" type="button" title="查看消息统计说明" aria-label="查看消息统计说明"><CircleHelp size={14} /></button></h2><p>最近 14 天的收发消息统计</p></div><div className="runtime-period-tabs">{[['day', '今日'], ['week', '本周'], ['month', '本月']].map(([value, label]) => <button key={value} className={period === value ? 'selected' : ''} onClick={() => setPeriod(value)}>{label}</button>)}</div></div>
+      <div className="runtime-section-heading runtime-stats-heading"><div><h2>消息趋势 <button className="runtime-info" type="button" title="查看消息统计说明" aria-label="查看消息统计说明"><CircleHelp size={14} /></button></h2><p>{showIntraday ? `${chartLabel({ day: selectedIntradayDay })} 按小时的收发消息统计` : '最近 14 天的收发消息统计 · 悬停日期后滚轮查看时分'}</p></div><div className="runtime-period-tabs">{[['day', '今日'], ['week', '本周'], ['month', '本月']].map(([value, label]) => <button key={value} className={period === value ? 'selected' : ''} onClick={() => setPeriod(value)}>{label}</button>)}</div></div>
       <div className="runtime-analytics-grid">
         <div className="runtime-chart-panel">
           <div className="runtime-chart-head"><div className="runtime-chart-legend"><span><i className="received" />收到</span><span><i className="sent" />发出</span></div></div>
-          <div className="runtime-chart-area" aria-label="近 14 天收到和发出消息趋势">
+          <div className="runtime-chart-area" aria-label={showIntraday ? `${chartLabel({ day: selectedIntradayDay })} 按小时收到和发出消息趋势` : '近 14 天收到和发出消息趋势，悬停日期后滚轮查看时分'} onWheel={handleChartWheel}>
             <div className="runtime-chart-y-axis">{chartLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}</div>
-            <div className={`runtime-chart-plot ${hoveredChartIndex === null ? '' : 'has-hover'}`} onMouseMove={handleChartMouseMove} onMouseLeave={() => setHoveredChartIndex(null)}><div className="runtime-chart-grid-lines"><i /><i /><i /><i /><i /></div><svg className="runtime-line-chart" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline className="received" points={chartPoints('received')} /><polyline className="sent" points={chartPoints('sent')} /></svg>{hasSeriesData && <div className="runtime-chart-points">{chartSeries.flatMap((item, index) => ['received', 'sent'].map((key) => { const { x, y } = chartPointPosition(item, index, key); const seriesLabel = key === 'received' ? '收到' : '发出'; return <button type="button" key={`${item.day}-${key}`} className={`runtime-chart-point ${key} ${hoveredChartIndex === index ? 'active' : ''}`} style={{ left: `${x}%`, top: `${y}%` }} aria-label={`${chartDayLabel(item.day)} ${seriesLabel} ${Number(item[key] || 0).toLocaleString()} 条`} onMouseEnter={() => setHoveredChartIndex(index)} onFocus={() => setHoveredChartIndex(index)} onBlur={() => setHoveredChartIndex(null)}><span className="runtime-chart-point-dot" aria-hidden="true" /></button> }))}</div>}{hoveredChartItem && hoveredChartPosition && <><span className="runtime-chart-hover-line" style={{ left: `${hoveredChartPosition.x}%` }} aria-hidden="true" /><div className={`runtime-chart-tooltip ${hoveredChartPosition.x < 18 ? 'edge-left' : hoveredChartPosition.x > 82 ? 'edge-right' : ''}`} style={{ left: `${hoveredChartPosition.x}%`, top: `${chartTooltipY}%` }} role="status"><strong>{chartDayLabel(hoveredChartItem.day)}</strong><span><i className="received" />收到 <b>{Number(hoveredChartItem.received || 0).toLocaleString()}</b></span><span><i className="sent" />发出 <b>{Number(hoveredChartItem.sent || 0).toLocaleString()}</b></span></div></>}<div className="runtime-chart-x-axis">{(hasSeriesData ? chartSeries : [{ day: '00:00' }, { day: '06:00' }, { day: '12:00' }, { day: '18:00' }, { day: '24:00' }]).map((item, index, items) => <span className={hoveredChartIndex === index ? 'active' : ''} key={`${item.day}-${index}`}>{hasSeriesData ? (index === 0 || index === items.length - 1 || index % 2 === 0 ? item.day.slice(5) : '') : item.day}</span>)}</div></div>
+            <div ref={chartPlotRef} className={`runtime-chart-plot ${hoveredChartIndex === null ? '' : 'has-hover'}`} onMouseMove={handleChartMouseMove} onMouseLeave={() => { setHoveredChartIndex(null); chartHoverRatioRef.current = null; chartPlotRef.current?.style.removeProperty('--chart-hover-x') }}><div className="runtime-chart-grid-lines"><i /><i /><i /><i /><i /></div><svg className="runtime-line-chart" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline className="received" points={chartPoints('received')} /><polyline className="sent" points={chartPoints('sent')} /></svg>{hasSeriesData && <div className="runtime-chart-points">{chartSeries.flatMap((item, index) => ['received', 'sent'].map((key) => { const { x, y } = chartPointPosition(item, index, key); const seriesLabel = key === 'received' ? '收到' : '发出'; const canDrillDown = !showIntraday && /^\d{4}-\d{2}-\d{2}$/.test(String(item.day || '')); const pointRatio = chartSeries.length === 1 ? .5 : index / (chartSeries.length - 1); const setPointHover = () => { setChartHoverPosition(pointRatio); setHoveredChartIndex(index) }; return <button type="button" key={`${item.time || item.day}-${key}`} className={`runtime-chart-point ${key} ${canDrillDown ? 'drillable' : ''} ${hoveredChartIndex === index ? 'active' : ''}`} style={{ left: `${x}%`, top: `${y}%` }} aria-label={`${chartLabel(item)} ${seriesLabel} ${Number(item[key] || 0).toLocaleString()} 条`} title={canDrillDown ? `点击查看${chartLabel(item)}的时分` : undefined} onMouseEnter={setPointHover} onFocus={setPointHover} onBlur={() => { setHoveredChartIndex(null); chartHoverRatioRef.current = null; chartPlotRef.current?.style.removeProperty('--chart-hover-x') }} onClick={() => { if (canDrillDown) { setIntradayDay(item.day); setChartMode('intraday') } }}><span className="runtime-chart-point-dot" aria-hidden="true" /></button> }))}</div>}{hoveredChartItem && hoveredChartPosition && <><span className="runtime-chart-hover-line" style={{ left: 'var(--chart-hover-x, 50%)' }} aria-hidden="true" /><div className={`runtime-chart-tooltip ${hoveredChartPosition.x < 18 ? 'edge-left' : hoveredChartPosition.x > 82 ? 'edge-right' : ''}`} style={{ left: 'var(--chart-hover-x, 50%)', top: `${chartTooltipY}%` }} role="status"><strong>{chartTooltipLabel(hoveredChartItem)}</strong><span><i className="received" />收到 <b>{Number(hoveredChartItem.received || 0).toLocaleString()}</b></span><span><i className="sent" />发出 <b>{Number(hoveredChartItem.sent || 0).toLocaleString()}</b></span></div></>}<div className="runtime-chart-x-axis">{(hasSeriesData ? chartSeries : emptySeries).map((item, index, items) => { const step = showIntraday ? 4 : 2; const visible = index === 0 || index === items.length - 1 || index % step === 0; return <span className={hoveredChartIndex === index ? 'active' : ''} key={`${item.time || item.day}-${index}`}>{visible ? chartLabel(item) : ''}</span> })}</div></div>
           </div>
         </div>
-        <div className="runtime-overview-panel"><h3>{periodLabel}统计</h3><div className="runtime-share-list"><div><span><i className="received" />收到消息</span><b>{received.toLocaleString()}</b><small>{receivedShare}%</small></div><div><span><i className="sent" />发出消息</span><b>{sent.toLocaleString()}</b><small>{sentShare}%</small></div><div><span><i className="media" />含媒体消息</span><b>{media.toLocaleString()}</b><small>{mediaShare}%</small></div></div><div className="runtime-overview-foot"><span>群聊 {Number(periodStats.groups || 0).toLocaleString()}</span><span>私聊 {Number(periodStats.private || 0).toLocaleString()}</span><span>命令 {Number(periodStats.commands || 0).toLocaleString()}</span></div></div>
+        <div className="runtime-overview-panel"><h3>{overviewPeriodLabel}统计</h3><div className="runtime-share-list"><div><span><i className="received" />收到消息</span><b>{received.toLocaleString()}</b><small>{receivedShare}%</small></div><div><span><i className="sent" />发出消息</span><b>{sent.toLocaleString()}</b><small>{sentShare}%</small></div><div><span><i className="media" />含媒体消息</span><b>{media.toLocaleString()}</b><small>{mediaShare}%</small></div></div><div className="runtime-overview-foot"><span>群聊 {Number(overviewStats.groups || 0).toLocaleString()}</span><span>私聊 {Number(overviewStats.private || 0).toLocaleString()}</span><span>命令 {Number(overviewStats.commands || 0).toLocaleString()}</span></div></div>
       </div>
     </section>
 
     <div className="runtime-columns">
-      <section className="runtime-section runtime-bots-section"><div className="runtime-section-heading"><div><h2>Bot 运行概况 <small>共 {bots.length} 个账号</small></h2></div></div>{bots.length ? <><div className="runtime-bot-table"><div className="runtime-bot-table-head"><span>Bot</span><span>QQ 号</span><span>状态</span><span>今日消息</span><span>OneBot 端口</span><span>机器人框架</span><span>操作</span></div>{visibleBots.map((bot) => { const running = isBotRunning(bot); const transitioning = isBotTransitioning(bot); const botTotal = Number(botStats.get(String(bot.id))?.total || 0); return <div className="runtime-bot-row" key={bot.id}><div className="runtime-bot-identity"><BotAvatar bot={bot} className="runtime-bot-avatar" /><div><strong>{bot.name}</strong></div></div><span className="runtime-bot-qq">{bot.qq}</span><StatusPill label={botStatusLabel(bot)} state={botStatusState(bot)} /><span className="runtime-table-value">{botTotal.toLocaleString()}</span><span className="runtime-table-value">{bot.port || '—'}</span><span className="runtime-table-value">{bot.framework_label || (bot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')}</span><div className="runtime-bot-row-actions"><button className="secondary runtime-view-button" onClick={() => onSelectBot(bot.id)}>查看账号</button><button className={`runtime-action ${running ? 'danger' : ''}`} onClick={() => action(bot, running ? 'stop' : 'start', running ? '停止' : '启动')} disabled={busy.startsWith(`${bot.id}:`) || transitioning}>{running ? <Square size={12} /> : <Play size={12} />}{transitioning ? botStatusLabel(bot) : running ? '停止' : '启动'}</button></div></div>})}</div>{pageCount > 1 && <div className="runtime-table-footer"><div className="runtime-pagination"><button className="plain-icon" onClick={() => setBotPage((page) => Math.max(1, page - 1))} disabled={botPage === 1} aria-label="上一页" title="上一页"><ChevronLeft size={15} /></button><span className="selected">{botPage}</span><button className="plain-icon" onClick={() => setBotPage((page) => Math.min(pageCount, page + 1))} disabled={botPage === pageCount} aria-label="下一页" title="下一页"><ChevronRight size={15} /></button></div><span>共 {bots.length} 条</span></div>}</> : <div className="runtime-empty"><Bot size={18} /><span>还没有可监控的 Bot</span></div>}</section>
+      <section className="runtime-section runtime-bots-section"><div className="runtime-section-heading"><div><h2>Bot 运行概况 <small>共 {bots.length} 个账号</small></h2></div></div>{bots.length ? <><div className="runtime-bot-table"><div className="runtime-bot-table-head"><span>Bot</span><span>QQ 号</span><span>状态</span><span>今日消息</span><span>OneBot 端口</span><span>机器人框架</span><span>操作</span></div>{visibleBots.map((bot) => { const running = isBotRunning(bot); const transitioning = isBotTransitioning(bot); const botTotal = Number(botStats.get(String(bot.id))?.total || 0); return <div className="runtime-bot-row" key={bot.id}><div className="runtime-bot-identity"><BotAvatar bot={bot} className="runtime-bot-avatar" /><div><strong>{bot.name}</strong><BotUptime bot={bot} /></div></div><span className="runtime-bot-qq">{bot.qq}</span><StatusPill label={botStatusLabel(bot)} state={botStatusState(bot)} /><span className="runtime-table-value">{botTotal.toLocaleString()}</span><span className="runtime-table-value">{bot.port || '—'}</span><span className="runtime-table-value">{bot.framework_label || (bot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')}</span><div className="runtime-bot-row-actions"><button className="secondary runtime-view-button" onClick={() => onSelectBot(bot.id)}>查看账号</button><button className={`runtime-action ${running ? 'danger' : ''}`} onClick={() => action(bot, running ? 'stop' : 'start', running ? '停止' : '启动')} disabled={busy.startsWith(`${bot.id}:`) || transitioning}>{running ? <Square size={12} /> : <Play size={12} />}{transitioning ? botStatusLabel(bot) : running ? '停止' : '启动'}</button></div></div>})}</div>{pageCount > 1 && <div className="runtime-table-footer"><div className="runtime-pagination"><button className="plain-icon" onClick={() => setBotPage((page) => Math.max(1, page - 1))} disabled={botPage === 1} aria-label="上一页" title="上一页"><ChevronLeft size={15} /></button><span className="selected">{botPage}</span><button className="plain-icon" onClick={() => setBotPage((page) => Math.min(pageCount, page + 1))} disabled={botPage === pageCount} aria-label="下一页" title="下一页"><ChevronRight size={15} /></button></div><span>共 {bots.length} 条</span></div>}</> : <div className="runtime-empty"><Bot size={18} /><span>还没有可监控的 Bot</span></div>}</section>
     </div>
 
     <section className="runtime-section runtime-services-section"><div className="runtime-section-heading"><div><h2>服务状态</h2></div></div><div className="runtime-service-cards"><div className="runtime-service-card"><div className="runtime-service-icon"><Server size={18} /></div><div><strong>NapCat</strong><span>{napcat.available ? 'QQ 协议端服务' : '尚未配置资源'}</span></div><StatusPill label={napcat.running > 0 ? '运行中' : '未启用'} state={napcat.running > 0 ? 'green' : 'muted'} /></div><div className="runtime-service-card"><div className="runtime-service-icon nonebot"><SquareTerminal size={18} /></div><div><strong>机器人框架</strong><span>{frameworkNames.length ? frameworkNames.join('、') : '等待账号配置'}</span></div><StatusPill label={runningBots.length ? '运行中' : '未启动'} state={runningBots.length ? 'green' : 'muted'} /></div><div className="runtime-service-card"><div className="runtime-service-icon onebot"><FileText size={18} /></div><div><strong>OneBot 端口</strong><span>{firstBot?.port ? `端口 ${firstBot.port} 可用` : '尚未配置端口'}</span></div><StatusPill label={firstBot?.port ? '正常' : '未配置'} state={firstBot?.port ? 'green' : 'muted'} /></div></div></section>

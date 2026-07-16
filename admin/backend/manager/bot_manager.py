@@ -13,7 +13,7 @@ from backend.adapter.napcat import NapCatAdapter
 from backend.adapter.onebot import OneBotAdapter
 from backend.adapter.process import find_listening_process, terminate_processes
 from backend.database.repository import BotRepository
-from backend.database.stats_repository import MessageStatsRepository
+from backend.database.stats_repository import MessageStatsRepository, parse_process_log_timestamp
 from backend.domain.errors import BotNotFoundError, ConflictError, OperationError
 from backend.domain.models import BotConfig
 from backend.event.bus import EventBus
@@ -97,14 +97,25 @@ class BotManager:
         # NapCat and the selected bot framework both write message lines for
         # the same event. Keep framework output canonical and retain NapCat's
         # connection/login diagnostics.
+        bot = self._bot_by_source.get(source)
         if self._is_napcat_message(message):
+            # AstrBot's framework log does not include a direction marker;
+            # its paired NapCat line is therefore the only reliable source
+            # for message statistics. NoneBot already emits a directional
+            # framework event, so keep the old de-duplication behavior there.
+            if bot is not None and bot.framework == "astrbot":
+                self._queue_stats_record(
+                    bot.id,
+                    message,
+                    parse_process_log_timestamp(message),
+                    self.stats.event_key({"source": source, "message": message}),
+                )
             return
         try:
             event = await self.event_bus.publish(level, source, message)
         except Exception:  # noqa: BLE001 - a log sink must never kill a process tailer
             _LOGGER.exception("发布 Bot 日志事件失败：source=%s", source)
             return
-        bot = self._bot_by_source.get(source)
         if bot is None:
             return
         runtime = self._runtime_for(bot.id)

@@ -8,7 +8,7 @@ import subprocess
 
 import psutil
 
-from backend.adapter.process import EventSink, OutputProcessAdapter, find_listening_process, process_command
+from backend.adapter.process import EventSink, OutputProcessAdapter, find_listening_process
 import backend.config as runtime_config
 from backend.domain.errors import AdapterUnavailableError
 from backend.domain.models import BotConfig
