@@ -5,6 +5,8 @@ const fs = require('fs')
 const path = require('path')
 const http = require('http')
 const API_PROTOCOL_VERSION = 4
+const API_HEALTH_TIMEOUT_MS = 5000
+const API_HEALTH_FAILURE_THRESHOLD = 6
 const SESSION_TOKEN = randomBytes(32).toString('hex')
 const API_URL = 'http://127.0.0.1:6700'
 
@@ -158,7 +160,7 @@ ipcMain.handle('select-directory', async () => {
   return result.canceled ? null : result.filePaths[0] || null
 })
 
-function apiHealthStatus(timeoutMs = 1500) {
+function apiHealthStatus(timeoutMs = API_HEALTH_TIMEOUT_MS) {
   return new Promise(resolve => {
     let settled = false
     const finish = status => {
@@ -193,7 +195,7 @@ function waitForApi(timeoutMs = 15000) {
   const started = Date.now()
   return new Promise((resolve, reject) => {
     const check = () => {
-      void apiHealthStatus(1500).then(status => {
+      void apiHealthStatus(API_HEALTH_TIMEOUT_MS).then(status => {
         if (status === 'current') return resolve()
         retry()
       })
@@ -208,7 +210,7 @@ function waitForApi(timeoutMs = 15000) {
 
 function apiStatus() {
   return new Promise(resolve => {
-    void apiHealthStatus(2500).then(status => {
+    void apiHealthStatus(API_HEALTH_TIMEOUT_MS).then(status => {
       if (status !== 'current') return resolve(status)
       let settled = false
       const finish = value => {
@@ -224,7 +226,7 @@ function apiStatus() {
         response.once('error', () => finish('incompatible'))
       })
       protectedRequest.once('error', () => finish('incompatible'))
-      protectedRequest.setTimeout(2500, () => {
+      protectedRequest.setTimeout(API_HEALTH_TIMEOUT_MS, () => {
         protectedRequest.destroy()
         finish('incompatible')
       })
@@ -277,20 +279,37 @@ function startApiMonitor() {
     if (closingApplication || apiStopping || apiRestarting || apiMonitorRunning) return
     apiMonitorRunning = true
     try {
-      const status = await apiHealthStatus(1500)
+      const status = await apiHealthStatus(API_HEALTH_TIMEOUT_MS)
       if (status !== 'offline') {
         apiOfflineChecks = 0
         return
       }
-      // A single slow health response must not kill a healthy backend. Wait
-      // for three consecutive failures before touching the managed process.
+      // A temporarily slow health response must not kill a healthy backend.
+      // Keep the threshold long enough to cover short CPU/memory pressure
+      // while SD WebUI is generating an image.
       apiOfflineChecks += 1
-      if (apiOfflineChecks < 3) return
+      console.warn(
+        `[管理服务] 管理 API 健康检查失败 ${apiOfflineChecks}/${API_HEALTH_FAILURE_THRESHOLD}`,
+      )
+      if (apiOfflineChecks < API_HEALTH_FAILURE_THRESHOLD) return
       apiOfflineChecks = 0
       apiRestarting = true
       const managedPid = apiPid || apiProcess?.pid
       if (managedPid && process.platform === 'win32') {
-        spawnSync('taskkill', ['/PID', String(managedPid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+        // Do not use /T here. The management API owns the Bot launcher
+        // process tree, so taskkill /T would also kill AstrBot and NapCat
+        // during an unrelated management-service recovery.
+        console.warn(
+          `[管理服务] 自动恢复管理 API：仅结束管理服务 PID=${managedPid}，保留 Bot 子进程`,
+        )
+        spawnSync('taskkill', ['/PID', String(managedPid), '/F'], { windowsHide: true, stdio: 'ignore' })
+      } else if (managedPid) {
+        try {
+          process.kill(managedPid)
+        } catch {
+          // The process may already have exited between the health check and
+          // this recovery attempt.
+        }
       }
       apiProcess = null
       apiPid = null
