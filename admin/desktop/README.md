@@ -30,4 +30,6 @@ NapCat 和 NoneBot 页面也可以随时重新选择资源目录。
 npm run dist:win
 ```
 
-打包完成后，启动程序位于项目根目录的 `release\QQBot-Desktop-Launcher.exe`。这是可携带启动器，需要和项目目录中的 `.venv`、`admin`、`program`、`data` 一起保留；它不会重复打包约 1.4GB 的 NapCat 文件。
+打包完成后，启动程序位于项目根目录的 `release\QQBot-Desktop-Launcher-Portable.exe` 和 `release\QQBot-Desktop-Launcher-Setup.exe`。两种版本都包含前端、管理 API 和 Python 运行时，可以发给其他 Windows 用户直接安装运行；用户首次配置 Bot 时，再从向导下载 NapCat、NoneBot 或 AstrBot 资源到用户数据目录。
+
+`release\win-unpacked` 是 Electron 的内部解包目录，不要单独复制或运行其中的 exe。
