@@ -54,6 +54,8 @@ let apiMonitorTimer
 let apiRestarting = false
 let apiMonitorRunning = false
 let apiOfflineChecks = 0
+let rendererRecoveryTimer
+let rendererRecoveryRunning = false
 let mainWindow
 let webUiWindow
 
@@ -324,6 +326,46 @@ function startApiMonitor() {
   }, 5000)
 }
 
+function attachMainWindowDiagnostics() {
+  const contents = mainWindow?.webContents
+  if (!contents) return
+
+  contents.on('console-message', (_event, details) => {
+    const level = typeof details?.level === 'number'
+      ? details.level
+      : ({ verbose: 0, info: 1, warning: 2, error: 3 }[details?.level] ?? 0)
+    if (level >= 2) {
+      console.warn(`[渲染进程] ${details.message} (${details.sourceId}:${details.lineNumber})`)
+    }
+  })
+  contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (isMainFrame) {
+      console.error(`[渲染进程] 页面加载失败 code=${errorCode} ${errorDescription}: ${validatedURL}`)
+    }
+  })
+  contents.on('unresponsive', () => console.error('[渲染进程] 页面无响应'))
+  contents.on('responsive', () => console.info('[渲染进程] 页面恢复响应'))
+  contents.on('render-process-gone', (_event, details) => {
+    console.error(`[渲染进程] 已退出 reason=${details.reason} exitCode=${details.exitCode}`)
+    if (closingApplication || rendererRecoveryRunning || !mainWindow || mainWindow.isDestroyed()) return
+    rendererRecoveryRunning = true
+    rendererRecoveryTimer = setTimeout(async () => {
+      rendererRecoveryTimer = null
+      try {
+        if (!closingApplication && mainWindow && !mainWindow.isDestroyed()) {
+          await mainWindow.loadFile(panelDist)
+          console.info('[渲染进程] 已自动重新加载管理面板')
+        }
+      } catch (error) {
+        console.error(`[渲染进程] 自动恢复失败：${error.message}`)
+        if (!closingApplication) dialog.showErrorBox('QQBot 管理面板异常', error.message)
+      } finally {
+        rendererRecoveryRunning = false
+      }
+    }, 500)
+  })
+}
+
 async function createWindow() {
   if (!fs.existsSync(panelDist)) {
     throw new Error(
@@ -338,6 +380,7 @@ async function createWindow() {
     minWidth: 1100,
     minHeight: 720,
     title: 'QQBot Desktop Launcher',
+    show: false,
     frame: false,
     backgroundColor: '#f8fafc',
     autoHideMenuBar: true,
@@ -350,6 +393,8 @@ async function createWindow() {
       additionalArguments: [`--qq-console-token=${SESSION_TOKEN}`],
     },
   })
+  mainWindow.once('ready-to-show', () => mainWindow?.show())
+  attachMainWindowDiagnostics()
   mainWindow.on('close', event => {
     if (apiPid && !closingApplication) {
       event.preventDefault()
@@ -409,6 +454,10 @@ let closingApplication = false
 async function closeApplication() {
   if (closingApplication) return
   closingApplication = true
+  if (rendererRecoveryTimer) {
+    clearTimeout(rendererRecoveryTimer)
+    rendererRecoveryTimer = null
+  }
   if (apiMonitorTimer) {
     clearInterval(apiMonitorTimer)
     apiMonitorTimer = null

@@ -1543,6 +1543,7 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, busy, action, 
   const [intradayDay, setIntradayDay] = useState('')
   const [botPage, setBotPage] = useState(1)
   const [hoveredChartIndex, setHoveredChartIndex] = useState(null)
+  const chartAreaRef = useRef(null)
   const chartPlotRef = useRef(null)
   const chartHoverRatioRef = useRef(null)
   const runningBots = bots.filter((bot) => isBotRunning(bot))
@@ -1602,7 +1603,7 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, busy, action, 
     setChartHoverPosition(ratio)
     setHoveredChartIndex((current) => current === nextIndex ? current : nextIndex)
   }
-  const handleChartWheel = (event) => {
+  const handleChartWheel = useCallback((event) => {
     if (period !== 'day') return
     if (!event.deltaY) return
     if (!showIntraday && event.deltaY < 0) return
@@ -1623,7 +1624,14 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, busy, action, 
     }
     window.requestAnimationFrame(restoreScrollPosition)
     window.setTimeout(restoreScrollPosition, 0)
-  }
+  }, [hoveredChartItem?.day, period, showIntraday])
+
+  useEffect(() => {
+    const chartArea = chartAreaRef.current
+    if (!chartArea) return undefined
+    chartArea.addEventListener('wheel', handleChartWheel, { passive: false })
+    return () => chartArea.removeEventListener('wheel', handleChartWheel)
+  }, [handleChartWheel])
   const periodLabel = period === 'day' ? '今日' : period === 'week' ? '本周' : '本月'
   const dashboardTotal = Number(periodStats.total || 0)
   const overviewStats = showIntraday
@@ -1673,7 +1681,7 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, busy, action, 
       <div className="runtime-analytics-grid">
         <div className="runtime-chart-panel">
           <div className="runtime-chart-head"><div className="runtime-chart-legend"><span><i className="received" />收到</span><span><i className="sent" />发出</span></div></div>
-          <div className="runtime-chart-area" aria-label={showIntraday ? `${chartLabel({ day: selectedIntradayDay })} 按小时收到和发出消息趋势` : '近 14 天收到和发出消息趋势，悬停日期后滚轮查看时分'} onWheel={handleChartWheel}>
+          <div ref={chartAreaRef} className="runtime-chart-area" aria-label={showIntraday ? `${chartLabel({ day: selectedIntradayDay })} 按小时收到和发出消息趋势` : '近 14 天收到和发出消息趋势，悬停日期后滚轮查看时分'}>
             <div className="runtime-chart-y-axis">{chartLabels.map((label, index) => <span key={`${label}-${index}`}>{label}</span>)}</div>
             <div ref={chartPlotRef} className={`runtime-chart-plot ${hoveredChartIndex === null ? '' : 'has-hover'}`} onMouseMove={handleChartMouseMove} onMouseLeave={() => { setHoveredChartIndex(null); chartHoverRatioRef.current = null; chartPlotRef.current?.style.removeProperty('--chart-hover-x') }}><div className="runtime-chart-grid-lines"><i /><i /><i /><i /><i /></div><svg className="runtime-line-chart" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline className="received" points={chartPoints('received')} /><polyline className="sent" points={chartPoints('sent')} /></svg>{hasSeriesData && <div className="runtime-chart-points">{chartSeries.flatMap((item, index) => ['received', 'sent'].map((key) => { const { x, y } = chartPointPosition(item, index, key); const seriesLabel = key === 'received' ? '收到' : '发出'; const canDrillDown = !showIntraday && /^\d{4}-\d{2}-\d{2}$/.test(String(item.day || '')); const pointRatio = chartSeries.length === 1 ? .5 : index / (chartSeries.length - 1); const setPointHover = () => { setChartHoverPosition(pointRatio); setHoveredChartIndex(index) }; return <button type="button" key={`${item.time || item.day}-${key}`} className={`runtime-chart-point ${key} ${canDrillDown ? 'drillable' : ''} ${hoveredChartIndex === index ? 'active' : ''}`} style={{ left: `${x}%`, top: `${y}%` }} aria-label={`${chartLabel(item)} ${seriesLabel} ${Number(item[key] || 0).toLocaleString()} 条`} title={canDrillDown ? `点击查看${chartLabel(item)}的时分` : undefined} onMouseEnter={setPointHover} onFocus={setPointHover} onBlur={() => { setHoveredChartIndex(null); chartHoverRatioRef.current = null; chartPlotRef.current?.style.removeProperty('--chart-hover-x') }} onClick={() => { if (canDrillDown) { setIntradayDay(item.day); setChartMode('intraday') } }}><span className="runtime-chart-point-dot" aria-hidden="true" /></button> }))}</div>}{hoveredChartItem && hoveredChartPosition && <><span className="runtime-chart-hover-line" style={{ left: 'var(--chart-hover-x, 50%)' }} aria-hidden="true" /><div className={`runtime-chart-tooltip ${hoveredChartPosition.x < 18 ? 'edge-left' : hoveredChartPosition.x > 82 ? 'edge-right' : ''}`} style={{ left: 'var(--chart-hover-x, 50%)', top: `${chartTooltipY}%` }} role="status"><strong>{chartTooltipLabel(hoveredChartItem)}</strong><span><i className="received" />收到 <b>{Number(hoveredChartItem.received || 0).toLocaleString()}</b></span><span><i className="sent" />发出 <b>{Number(hoveredChartItem.sent || 0).toLocaleString()}</b></span></div></>}<div className="runtime-chart-x-axis">{(hasSeriesData ? chartSeries : emptySeries).map((item, index, items) => { const step = showIntraday ? 4 : 2; const visible = index === 0 || index === items.length - 1 || index % step === 0; return <span className={hoveredChartIndex === index ? 'active' : ''} key={`${item.time || item.day}-${index}`}>{visible ? chartLabel(item) : ''}</span> })}</div></div>
           </div>
@@ -1703,4 +1711,39 @@ function DeleteAccountModal({ bot, deleting, onClose, onConfirm }) {
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="delete-modal" role="alertdialog" aria-labelledby="delete-account-title"><div className="modal-header"><div><div className="eyebrow">QQ 控制台</div><h2 id="delete-account-title">删除账号</h2><p>确认删除「{bot.name}」？</p></div><button type="button" className="modal-close" onClick={onClose} aria-label="关闭" disabled={deleting}><X size={18} /></button></div><div className="delete-warning">删除后会移除账号记录和专属启动脚本；不会删除 NapCat 安装文件。</div><div className="modal-actions"><button type="button" className="secondary" onClick={onClose} disabled={deleting}>取消</button><button type="button" className="action-button danger" onClick={onConfirm} disabled={deleting}>{deleting ? '删除中…' : '确认删除'}</button></div></div></div>
 }
 
-createRoot(document.getElementById('root')).render(<App />)
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+
+  componentDidCatch(error, info) {
+    console.error('[QQ 控制台] React 渲染异常', error, info.componentStack)
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children
+    const message = this.state.error?.message || String(this.state.error)
+    return <main className="app-runtime-error" role="alert">
+      <div className="app-runtime-error-card">
+        <h1>控制台渲染异常</h1>
+        <p>页面运行过程中遇到错误，管理服务仍可能在后台运行。</p>
+        <code>{message}</code>
+        <button type="button" onClick={() => window.location.reload()}>重新加载控制台</button>
+      </div>
+    </main>
+  }
+}
+
+window.addEventListener('error', (event) => {
+  console.error('[QQ 控制台] 未捕获前端异常', event.error || event.message)
+})
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('[QQ 控制台] 未处理 Promise 异常', event.reason)
+})
+
+createRoot(document.getElementById('root')).render(<AppErrorBoundary><App /></AppErrorBoundary>)
