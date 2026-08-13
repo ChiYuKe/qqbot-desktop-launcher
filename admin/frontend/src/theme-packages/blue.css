@@ -278,9 +278,11 @@
 :root[data-theme="dark"][data-theme-package="blue"] .delete-modal { color: var(--ink); background: var(--panel); }
 :root[data-theme="dark"][data-theme-package="blue"] .resource-setup-item.setup-option.selected { background: var(--selected); }
 :root[data-theme="dark"][data-theme-package="blue"] .activity-feed::-webkit-scrollbar-track,
-:root[data-theme="dark"][data-theme-package="blue"] .settings-main::-webkit-scrollbar-track { background: var(--panel); }
+:root[data-theme="dark"][data-theme-package="blue"] .settings-main::-webkit-scrollbar-track,
+:root[data-theme="dark"][data-theme-package="blue"] .plugin-page::-webkit-scrollbar-track { background: var(--panel); }
 :root[data-theme="dark"][data-theme-package="blue"] .activity-feed::-webkit-scrollbar-thumb,
-:root[data-theme="dark"][data-theme-package="blue"] .settings-main::-webkit-scrollbar-thumb { background: #426987; border-color: var(--panel); }
+:root[data-theme="dark"][data-theme-package="blue"] .settings-main::-webkit-scrollbar-thumb,
+:root[data-theme="dark"][data-theme-package="blue"] .plugin-page::-webkit-scrollbar-thumb { background: #426987; border-color: var(--panel); }
 
 .theme-package-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .theme-package-card { min-width: 0; padding: 0; overflow: hidden; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 11px; text-align: left; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
@@ -312,3 +314,149 @@
 .theme-package-card-meta strong { color: var(--accent); font-weight: 650; }
 .theme-package-card:not(.selected) .theme-package-card-meta strong { color: var(--muted); }
 @media (max-width: 760px) { .theme-package-grid { grid-template-columns: 1fr; } }
+
+/* Dark blue package: keep blue as an accent, not as the dominant surface. */
+:root[data-theme="dark"][data-theme-package="blue"] {
+  --ink: #dce4ec;
+  --muted: #9aa9b8;
+  --subtle: #708191;
+  --accent: #5aaee5;
+  --accent-dark: #3f8fbe;
+  --selected: #263b4d;
+  --line: #2b3742;
+  --line-strong: #3b4b5a;
+  --surface: #181e24;
+  --surface-solid: #1b2229;
+  --surface-soft: #1d252d;
+  --surface-strong: #222b34;
+  --canvas: #151a20;
+  --field: #1c252e;
+  --panel: #1d242b;
+  --card-surface: #202930;
+  --panel-shadow: 0 10px 28px rgba(0, 0, 0, .24);
+  --card-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+  --green: #58c79c;
+  --red: #ee777f;
+  --yellow: #e4bd67;
+}
+
+:root[data-theme="dark"][data-theme-package="blue"] body,
+:root[data-theme="dark"][data-theme-package="blue"] .app-shell,
+:root[data-theme="dark"][data-theme-package="blue"] .app-body,
+:root[data-theme="dark"][data-theme-package="blue"] .main-content,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-main,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-shell,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-page,
+:root[data-theme="dark"][data-theme-package="blue"] .overview-page,
+:root[data-theme="dark"][data-theme-package="blue"] .workspace-detail { background: var(--canvas); }
+
+:root[data-theme="dark"][data-theme-package="blue"] .app-topbar,
+:root[data-theme="dark"][data-theme-package="blue"] .sidebar,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-sidebar {
+  background: #191f25;
+  border-color: var(--line);
+}
+:root[data-theme="dark"][data-theme-package="blue"] .workspace-list,
+:root[data-theme="dark"][data-theme-package="blue"] .detail-topbar,
+:root[data-theme="dark"][data-theme-package="blue"] .detail-tabs { background: #1b2229; border-color: var(--line); }
+
+:root[data-theme="dark"][data-theme-package="blue"] .settings-panel,
+:root[data-theme="dark"][data-theme-package="blue"] .appearance-card,
+:root[data-theme="dark"][data-theme-package="blue"] .overview-card,
+:root[data-theme="dark"][data-theme-package="blue"] .overview-metric,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-page .runtime-metric,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-page .runtime-section,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-page .runtime-chart-panel,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-page .runtime-overview-panel,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-page .runtime-comparison-panel,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-page .runtime-ranking-panel,
+:root[data-theme="dark"][data-theme-package="blue"] .plugin-list {
+  background: var(--panel);
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+:root[data-theme="dark"][data-theme-package="blue"] .sidebar-search,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-search,
+:root[data-theme="dark"][data-theme-package="blue"] .account-search-wrap,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-font-select-trigger,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-select-wrap select {
+  color: var(--muted);
+  background: #1d252d;
+  border-color: var(--line-strong);
+}
+
+:root[data-theme="dark"][data-theme-package="blue"] .nav-item.active,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-nav-item.active,
+:root[data-theme="dark"][data-theme-package="blue"] .account-list-item.selected {
+  color: #e6f2fb;
+  background: #29445a;
+  box-shadow: inset 2px 0 var(--accent);
+}
+:root[data-theme="dark"][data-theme-package="blue"] .nav-item:hover,
+:root[data-theme="dark"][data-theme-package="blue"] .bottom-item:hover,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-nav-item:hover,
+:root[data-theme="dark"][data-theme-package="blue"] .nav-item-wrap:hover,
+:root[data-theme="dark"][data-theme-package="blue"] .nav-item-wrap.active-wrap,
+:root[data-theme="dark"][data-theme-package="blue"] .account-list-item:hover,
+:root[data-theme="dark"][data-theme-package="blue"] .overview-bot-row:hover,
+:root[data-theme="dark"][data-theme-package="blue"] .overview-actions button:hover,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-page .secondary:hover,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-period-tabs button:hover { background: #253541; }
+
+:root[data-theme="dark"][data-theme-package="blue"] .appearance-card-heading,
+:root[data-theme="dark"][data-theme-package="blue"] .appearance-row { border-color: var(--line); }
+:root[data-theme="dark"][data-theme-package="blue"] .appearance-card-heading h2,
+:root[data-theme="dark"][data-theme-package="blue"] .appearance-row strong,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-page-heading h1 { color: var(--ink); }
+:root[data-theme="dark"][data-theme-package="blue"] .appearance-card-heading p,
+:root[data-theme="dark"][data-theme-package="blue"] .appearance-row span,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-page-heading p { color: var(--muted); }
+:root[data-theme="dark"][data-theme-package="blue"] .appearance-row b { color: #b9c7d3; background: #252e36; border-color: var(--line-strong); }
+:root[data-theme="dark"][data-theme-package="blue"] .settings-note { background: #222b34; }
+
+:root[data-theme="dark"][data-theme-package="blue"] .plugin-details,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-page .runtime-bot-card,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-page .runtime-service-icon,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-page .runtime-stat-card,
+:root[data-theme="dark"][data-theme-package="blue"] .activity-feed { background: #202930; border-color: var(--line); }
+:root[data-theme="dark"][data-theme-package="blue"] .command-box,
+:root[data-theme="dark"][data-theme-package="blue"] .secondary,
+:root[data-theme="dark"][data-theme-package="blue"] .soft-button { background: #1d252d; border-color: var(--line-strong); }
+
+:root[data-theme="dark"][data-theme-package="blue"] .action-button,
+:root[data-theme="dark"][data-theme-package="blue"] .list-header .plain-icon,
+:root[data-theme="dark"][data-theme-package="blue"] .command-box button {
+  color: #f4fbff;
+  background: #327eae;
+  border-color: transparent;
+  box-shadow: 0 2px 8px rgba(24, 86, 122, .22);
+}
+:root[data-theme="dark"][data-theme-package="blue"] .action-button:hover,
+:root[data-theme="dark"][data-theme-package="blue"] .list-header .plain-icon:hover,
+:root[data-theme="dark"][data-theme-package="blue"] .command-box button:hover { background: #469bc9; }
+:root[data-theme="dark"][data-theme-package="blue"] .overview-metric-icon,
+:root[data-theme="dark"][data-theme-package="blue"] .overview-metric-icon.purple,
+:root[data-theme="dark"][data-theme-package="blue"] .overview-metric-icon.green,
+:root[data-theme="dark"][data-theme-package="blue"] .overview-metric-icon.blue,
+:root[data-theme="dark"][data-theme-package="blue"] .overview-metric-icon.orange,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-metric-icon,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-metric-icon.purple,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-metric-icon.green,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-metric-icon.blue,
+:root[data-theme="dark"][data-theme-package="blue"] .runtime-metric-icon.orange { color: #78b9de; background: transparent; }
+:root[data-theme="dark"][data-theme-package="blue"] .app-shell::after { border-color: rgba(102, 132, 153, .26); box-shadow: 0 0 22px rgba(0, 0, 0, .22); }
+:root[data-theme="dark"][data-theme-package="blue"] .theme-option.selected .theme-preview { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(90, 174, 229, .18); }
+:root[data-theme="dark"][data-theme-package="blue"] .settings-font-select-option.selected { background: #29445a; }
+:root[data-theme="dark"][data-theme-package="blue"] .plugin-page { scrollbar-color: #526676 #151a20; }
+:root[data-theme="dark"][data-theme-package="blue"] .plugin-page::-webkit-scrollbar-track,
+:root[data-theme="dark"][data-theme-package="blue"] .activity-feed::-webkit-scrollbar-track,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-main::-webkit-scrollbar-track { background: #151a20; }
+:root[data-theme="dark"][data-theme-package="blue"] .plugin-page::-webkit-scrollbar-thumb,
+:root[data-theme="dark"][data-theme-package="blue"] .activity-feed::-webkit-scrollbar-thumb,
+:root[data-theme="dark"][data-theme-package="blue"] .settings-main::-webkit-scrollbar-thumb { background: #526676; border-color: #151a20; }
+:root[data-theme-package="blue"] .runtime-metric-icon,
+:root[data-theme-package="blue"] .runtime-metric-icon.purple,
+:root[data-theme-package="blue"] .runtime-metric-icon.green,
+:root[data-theme-package="blue"] .runtime-metric-icon.blue,
+:root[data-theme-package="blue"] .runtime-metric-icon.orange { background: transparent; }

@@ -46,6 +46,7 @@ data/
 dist/
 build/
 release/
+release-build/
 admin/backend-dist/
 admin/backend-build/
 admin/desktop/runtime-python/

@@ -7,6 +7,8 @@ const http = require('http')
 const API_PROTOCOL_VERSION = 4
 const API_HEALTH_TIMEOUT_MS = 5000
 const API_HEALTH_FAILURE_THRESHOLD = 6
+const API_RESTART_BASE_DELAY_MS = 1000
+const API_RESTART_MAX_DELAY_MS = 30000
 const SESSION_TOKEN = randomBytes(32).toString('hex')
 const API_URL = 'http://127.0.0.1:6700'
 
@@ -54,6 +56,8 @@ let apiMonitorTimer
 let apiRestarting = false
 let apiMonitorRunning = false
 let apiOfflineChecks = 0
+let apiRestartAttempts = 0
+let apiHealthySince = 0
 let rendererRecoveryTimer
 let rendererRecoveryRunning = false
 let mainWindow
@@ -261,18 +265,34 @@ async function startApi() {
   apiProcess = spawn(command, args, {
     cwd: runtimeRoot,
     windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    // Uvicorn access output is intentionally discarded. A pipe that is not
+    // consumed reliably will eventually fill and freeze the backend.
+    stdio: ['ignore', 'ignore', 'pipe'],
     env: environment,
   })
+  const startedProcess = apiProcess
   apiPid = apiProcess.pid
   apiProcess.on('error', error => dialog.showErrorBox('管理服务启动失败', error.message))
-  apiProcess.on('exit', () => {
-    if (apiProcess?.pid === apiPid) {
+  apiProcess.on('exit', (code, signal) => {
+    // A delayed exit event from the previous backend must not clear the
+    // handle of a replacement process that is already running.
+    if (apiProcess === startedProcess) {
       apiProcess = null
       apiPid = null
     }
+    if (!closingApplication && !apiStopping) {
+      console.error(`[管理服务] 进程异常退出 code=${code} signal=${signal}`)
+    }
   })
   apiProcess.stderr?.on('data', chunk => console.error(`[管理服务] ${String(chunk).trim()}`))
+}
+
+function apiRestartDelay() {
+  return Math.min(API_RESTART_MAX_DELAY_MS, API_RESTART_BASE_DELAY_MS * (2 ** Math.min(apiRestartAttempts, 5)))
+}
+
+function delay(timeoutMs) {
+  return new Promise(resolve => setTimeout(resolve, timeoutMs))
 }
 
 function startApiMonitor() {
@@ -284,8 +304,11 @@ function startApiMonitor() {
       const status = await apiHealthStatus(API_HEALTH_TIMEOUT_MS)
       if (status !== 'offline') {
         apiOfflineChecks = 0
+        if (!apiHealthySince) apiHealthySince = Date.now()
+        if (Date.now() - apiHealthySince >= 60000) apiRestartAttempts = 0
         return
       }
+      apiHealthySince = 0
       // A temporarily slow health response must not kill a healthy backend.
       // Keep the threshold long enough to cover short CPU/memory pressure
       // while SD WebUI is generating an image.
@@ -296,6 +319,8 @@ function startApiMonitor() {
       if (apiOfflineChecks < API_HEALTH_FAILURE_THRESHOLD) return
       apiOfflineChecks = 0
       apiRestarting = true
+      const restartDelay = apiRestartDelay()
+      apiRestartAttempts += 1
       const managedPid = apiPid || apiProcess?.pid
       if (managedPid && process.platform === 'win32') {
         // Do not use /T here. The management API owns the Bot launcher
@@ -315,6 +340,9 @@ function startApiMonitor() {
       }
       apiProcess = null
       apiPid = null
+      console.warn(`[管理服务] ${restartDelay}ms 后尝试第 ${apiRestartAttempts} 次恢复`)
+      await delay(restartDelay)
+      if (closingApplication || apiStopping) return
       await startApi()
       await waitForApi(8000)
     } catch (error) {

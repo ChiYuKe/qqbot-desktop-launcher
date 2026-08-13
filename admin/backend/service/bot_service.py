@@ -189,6 +189,12 @@ class BotService:
         bot = self.manager.get(bot_id)
         return runtime_config.napcat_webui_credentials(bot.id, bot.napcat_port)
 
+    def astrbot_webui_credentials(self, bot_id: str) -> dict[str, object]:
+        bot = self.manager.get(bot_id)
+        if bot.framework != "astrbot":
+            raise ValueError("只有 AstrBot 账号可以打开 AstrBot WebUI")
+        return runtime_config.astrbot_webui_credentials(bot.id, bot.napcat_port)
+
     def reset_astrbot_password(self, bot_id: str) -> dict[str, object]:
         bot = self.manager.get(bot_id)
         if bot.framework != "astrbot":

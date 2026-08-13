@@ -21,6 +21,8 @@ ProcessAlive = Callable[[], bool]
 _listener_cache: tuple[float, list[Any]] | None = None
 _listener_cache_lock = threading.Lock()
 _LOGGER = logging.getLogger(__name__)
+_TAIL_IDLE_INTERVAL = 0.5
+_TAIL_ERROR_MAX_INTERVAL = 5.0
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,22 @@ def process_command(process: psutil.Process) -> str:
         return " ".join(str(item) for item in (process.cmdline() or [])).lower()
     except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
         return ""
+
+
+def process_is_alive(process: psutil.Process, created_at: float | None = None) -> bool:
+    """Check that a process still represents the same live OS process.
+
+    ``pid_exists``/``is_running`` alone are not sufficient for a long-lived
+    supervisor: PIDs are reused and POSIX zombies still report as running.
+    """
+    try:
+        if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
+            return False
+        if created_at is not None and abs(process.create_time() - created_at) > 0.01:
+            return False
+        return True
+    except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+        return False
 
 
 def find_listening_process(port: int) -> psutil.Process | None:
@@ -62,7 +80,7 @@ def find_listening_process(port: int) -> psutil.Process | None:
             continue
         try:
             process = psutil.Process(connection.pid)
-            if process.is_running():
+            if process_is_alive(process):
                 return process
         except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
             continue
@@ -177,6 +195,7 @@ class OutputProcessAdapter:
         self._log_suffix = log_suffix
         self._processes: dict[str, subprocess.Popen[str]] = {}
         self._external: dict[str, psutil.Process] = {}
+        self._identities: dict[str, float] = {}
         self._started_at: dict[str, float] = {}
         self._drain_tasks: dict[str, asyncio.Task[None]] = {}
         try:
@@ -188,22 +207,25 @@ class OutputProcessAdapter:
         process = self._processes.get(bot_id)
         if process and process.poll() is not None:
             self._processes.pop(bot_id, None)
+            self._identities.pop(bot_id, None)
             return None
         return process
 
     def tracked_process(self, bot_id: str) -> psutil.Process | None:
         process = self.process(bot_id)
         if process is not None:
-            with suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-                return psutil.Process(process.pid)
+            with suppress(psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                candidate = psutil.Process(process.pid)
+                if process_is_alive(candidate, self._identities.get(bot_id)):
+                    return candidate
+            self._processes.pop(bot_id, None)
+            self._identities.pop(bot_id, None)
         external = self._external.get(bot_id)
         if external is not None:
-            try:
-                if external.is_running():
-                    return external
-            except psutil.Error:
-                pass
+            if process_is_alive(external, self._identities.get(bot_id)):
+                return external
             self._external.pop(bot_id, None)
+            self._identities.pop(bot_id, None)
         return None
 
     def is_running(self, bot_id: str) -> bool:
@@ -222,6 +244,8 @@ class OutputProcessAdapter:
         self._processes[bot.id] = process
         self._external.pop(bot.id, None)
         self._started_at[bot.id] = time.time()
+        with suppress(psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            self._identities[bot.id] = psutil.Process(process.pid).create_time()
         self._start_tail(bot, lambda: process.poll() is None, start_position)
 
     def attach_external(self, bot: BotConfig, process: psutil.Process) -> None:
@@ -234,6 +258,7 @@ class OutputProcessAdapter:
             started_at = None
         if started_at is not None:
             self._started_at[bot.id] = started_at
+            self._identities[bot.id] = started_at
         path = self.prepare_log_path(bot)
         try:
             start_position = path.stat().st_size
@@ -282,14 +307,23 @@ class OutputProcessAdapter:
 
     async def _tail_output(self, bot: BotConfig, is_alive: ProcessAlive, position: int) -> None:
         path = self.log_path(bot)
-        while True:
-            try:
-                if path.exists():
-                    size = path.stat().st_size
-                    if position > size:
-                        position = 0
-                    with path.open("r", encoding="utf-8", errors="replace") as stream:
-                        stream.seek(position)
+        stream: Any = None
+        opened_identity: tuple[int, int] | None = None
+        error_interval = _TAIL_IDLE_INTERVAL
+        try:
+            while True:
+                try:
+                    if path.exists():
+                        stat = path.stat()
+                        identity = (int(stat.st_dev), int(stat.st_ino))
+                        if stream is None or opened_identity != identity or position > stat.st_size:
+                            if stream is not None:
+                                stream.close()
+                            if position > stat.st_size:
+                                position = 0
+                            stream = path.open("r", encoding="utf-8", errors="replace")
+                            stream.seek(position)
+                            opened_identity = identity
                         while True:
                             line = stream.readline()
                             if not line:
@@ -301,15 +335,26 @@ class OutputProcessAdapter:
                                 raise
                             except Exception:  # noqa: BLE001 - one bad sink event must not kill tailing
                                 _LOGGER.exception("转发 Bot 日志失败：bot=%s", bot.id)
-                if not is_alive():
-                    return
-            except asyncio.CancelledError:
-                raise
-            except (OSError, UnicodeError, ValueError, psutil.Error):
-                with suppress(psutil.Error):
+                        error_interval = _TAIL_IDLE_INTERVAL
                     if not is_alive():
                         return
-            await asyncio.sleep(0.25)
+                except asyncio.CancelledError:
+                    raise
+                except (OSError, UnicodeError, ValueError, psutil.Error):
+                    if stream is not None:
+                        with suppress(OSError):
+                            stream.close()
+                        stream = None
+                        opened_identity = None
+                    with suppress(psutil.Error):
+                        if not is_alive():
+                            return
+                    error_interval = min(_TAIL_ERROR_MAX_INTERVAL, error_interval * 2)
+                await asyncio.sleep(error_interval)
+        finally:
+            if stream is not None:
+                with suppress(OSError):
+                    stream.close()
 
     def process_ids(self, bot_id: str) -> set[int]:
         process = self.tracked_process(bot_id)
@@ -321,6 +366,7 @@ class OutputProcessAdapter:
         if close is not None:
             close()
         self._external.pop(bot_id, None)
+        self._identities.pop(bot_id, None)
         self._started_at.pop(bot_id, None)
         task = self._drain_tasks.pop(bot_id, None)
         if task is not None:
@@ -347,4 +393,5 @@ class OutputProcessAdapter:
         self._processes.clear()
         self._external.clear()
         self._started_at.clear()
+        self._identities.clear()
         self._drain_tasks.clear()

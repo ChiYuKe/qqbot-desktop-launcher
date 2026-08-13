@@ -76,6 +76,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.bot_service = BotService(repository, manager, event_bus, stats)
     app.state.plugin_registry = PluginRegistry()
     manager.recover_external_logs()
+    manager.start_supervisor()
     await event_bus.publish("INFO", "系统", f"管理 API 已启动，已加载 {len(repository.list())} 个 Bot")
     try:
         yield

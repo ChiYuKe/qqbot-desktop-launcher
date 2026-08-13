@@ -497,6 +497,15 @@ function App() {
         notify(`NapCat 登录信息读取失败：${error.message}`)
       }
     }
+    if (kind === 'astrbot' && botOverride) {
+      try {
+        const credentials = await api(`/api/bots/${botOverride.id}/astrbot/webui`)
+        if (credentials.url) resolvedTarget = { ...target, url: credentials.url }
+        if (!credentials.available) notify('AstrBot WebUI 暂时不可用，请先启动一次 AstrBot')
+      } catch (error) {
+        notify(`AstrBot 登录信息读取失败：${error.message}`)
+      }
+    }
     setEmbeddedWebUi({ ...resolvedTarget, kind, botId: botOverride?.id || '' })
   }
 
@@ -1021,7 +1030,7 @@ function AccountWorkspace({ bots, selectedBot, selectedBotId, setSelectedBotId, 
         <div className="detail-tabs"><button className={`detail-tab ${detailView === 'overview' ? 'active' : ''}`} onClick={() => setDetailView('overview')}>概览</button><button className={`detail-tab ${detailView === 'config' ? 'active' : ''}`} onClick={() => setDetailView('config')}>配置</button></div>
         <div className={`detail-scroll ${detailView === 'config' ? 'config-detail' : ''}`}>
           {detailView === 'overview' ? <>
-          <div className="account-summary"><div className="summary-row"><span>状态</span><StatusPill label={botStatusLabel(selectedBot)} state={botStatusState(selectedBot)} /></div><div className="summary-row"><span>持续运行</span><BotUptime bot={selectedBot} /></div><div className="summary-row"><span>QQ 号</span><b className="summary-value mono">{selectedBot.qq}</b></div><div className="summary-row"><span>协议端</span><StatusPill label="NapCat" state={!napcat.available ? 'red' : selectedBot.runtime?.napcat?.running ? 'green' : 'muted'} /></div><div className="summary-row"><span>机器人框架</span><StatusPill label={selectedBot.framework_label || (selectedBot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')} state={selectedBot.runtime?.framework?.running ? 'green' : 'muted'} /></div><div className="summary-row"><span>OneBot 端口</span><b className="summary-value mono">{selectedBot.port || '—'}</b></div><div className="summary-row"><span>NapCat WebUI</span><b className="summary-value mono">{selectedBot.napcat_port || '—'}</b></div></div>
+          <div className="account-summary"><div className="summary-row"><span>状态</span><StatusPill label={botStatusLabel(selectedBot)} state={botStatusState(selectedBot)} /></div><div className="summary-row"><span>持续运行</span><BotUptime bot={selectedBot} /></div><div className="summary-row"><span>QQ 号</span><b className="summary-value mono">{selectedBot.qq}</b></div><div className="summary-row"><span>协议端</span><RestartableStatus label="NapCat" state={!napcat.available ? 'red' : selectedBot.runtime?.napcat?.running ? 'green' : 'muted'} title="重启 NapCat 协议端" disabled={transitioning || busy.startsWith(`${selectedBot.id}:`)} onRestart={() => action(selectedBot, 'restart-napcat', '重启 NapCat 协议端')} /></div><div className="summary-row"><span>机器人框架</span><RestartableStatus label={selectedBot.framework_label || (selectedBot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')} state={selectedBot.runtime?.framework?.running ? 'green' : 'muted'} title="重启机器人框架" disabled={transitioning || busy.startsWith(`${selectedBot.id}:`)} onRestart={() => action(selectedBot, 'restart-framework', '重启机器人框架')} /></div><div className="summary-row"><span>OneBot 端口</span><b className="summary-value mono">{selectedBot.port || '—'}</b></div><div className="summary-row"><span>NapCat WebUI</span><b className="summary-value mono">{selectedBot.napcat_port || '—'}</b></div></div>
           <div className="conversation"><div className="conversation-header"><div><h3>实时活动</h3><span>{logsPaused ? '日志同步已暂停' : '来自本机服务的最新状态'}</span></div><div className="conversation-tools"><button className="plain-icon" onClick={onTogglePause} aria-label={logsPaused ? '恢复日志' : '暂停日志'} title={logsPaused ? '恢复日志更新' : '暂停日志更新'}>{logsPaused ? <Play size={15} /> : <Pause size={15} />}</button><button className="plain-icon" onClick={onClear} aria-label="清空日志" title="清空日志"><Trash2 size={15} /></button></div></div>{verification && <LoginVerificationCard verification={verification} onRetry={async () => { try { await onCommand(selectedBot, `-q ${selectedBot.qq}`, botLogs); onNotice('已重新尝试登录，请等待二维码或登录结果') } catch (error) { onNotice(`重新登录失败：${error.message}`) } }} onNotice={onNotice} />}<div className="activity-feed" ref={feedRef} onScroll={() => { const feed = feedRef.current; if (feed) followLogsRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 24 }}>{visibleLogs.length ? visibleLogs.map((log, index) => { const qrKey = `${log.time}-${log.source}-${index}`; return <LogItem key={qrKey} log={log} qrVisible={visibleQrKey === qrKey} onToggleQr={() => setVisibleQrKey(visibleQrKey === qrKey ? '' : qrKey)} /> }) : <div className="activity-empty">暂无日志</div>}</div><div className="command-box"><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="输入 -q 2 快速登录…" onKeyDown={(event) => { if (event.key === 'Enter') submitCommand() }} /><button onClick={submitCommand} aria-label="发送"><Play size={14} /></button></div></div>
            </> : <AccountConfig key={`${selectedBot.id}-${selectedBot.port}-${selectedBot.napcat_port}-${selectedBot.framework}`} bot={selectedBot} onSavePassword={onSavePassword} onSavePort={onSavePort} onSaveNapcatPort={onSaveNapcatPort} onSaveFramework={onSaveFramework} onOpenWebUi={onOpenWebUi} onNotice={onNotice} />}
         </div>
@@ -1268,6 +1277,10 @@ function EmptyDetail({ onCreate }) {
 
 function StatusPill({ label, state }) {
   return <span className={`status-pill ${state}`}><i />{label}</span>
+}
+
+function RestartableStatus({ label, state, title, disabled, onRestart }) {
+  return <button type="button" className={`status-pill restartable-status ${state}`} onClick={onRestart} disabled={disabled} aria-label={title} title={title}><i /><span className="status-current">{label}</span><span className="restart-label">重启</span></button>
 }
 
 function LoginVerificationCard({ verification, onRetry, onNotice }) {
@@ -1549,7 +1562,8 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, busy, action, 
   const runningBots = bots.filter((bot) => isBotRunning(bot))
   const frameworkNames = [...new Set(bots.map((bot) => bot.framework_label || (bot.framework === 'astrbot' ? 'AstrBot' : 'NoneBot')))]
   const periodStats = stats?.periods?.[period] || { received: 0, sent: 0, total: 0, groups: 0, private: 0, media: 0, commands: 0, active_days: 0 }
-  const periodBots = stats?.bots?.[period] || []
+  const todayStats = stats?.periods?.day || { received: 0, sent: 0, total: 0, groups: 0, private: 0, media: 0, commands: 0, active_days: 0 }
+  const todayBots = stats?.bots?.day || []
   const dailySeries = stats?.series || []
   const intradayByDay = stats?.intraday_by_day || {}
   const defaultIntradayDay = dailySeries[dailySeries.length - 1]?.day || ''
@@ -1633,7 +1647,9 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, busy, action, 
     return () => chartArea.removeEventListener('wheel', handleChartWheel)
   }, [handleChartWheel])
   const periodLabel = period === 'day' ? '今日' : period === 'week' ? '本周' : '本月'
-  const dashboardTotal = Number(periodStats.total || 0)
+  // The KPI and account table are explicitly labelled "今日消息". They must
+  // remain daily even when the trend panel is switched to week or month.
+  const dashboardTotal = Number(todayStats.total || 0)
   const overviewStats = showIntraday
     ? dailySeries.find((item) => item.day === selectedIntradayDay) || periodStats
     : periodStats
@@ -1643,12 +1659,12 @@ function RuntimeStatusPage({ bots, system, stats, napcat, online, busy, action, 
   const sent = Number(overviewStats.sent || 0)
   const receivedShare = total ? Math.round(received / total * 100) : 0
   const sentShare = total ? Math.round(sent / total * 100) : 0
-  const media = Number(periodStats.media || 0)
+  const media = Number(overviewStats.media || 0)
   const mediaShare = total ? Math.round(media / total * 100) : 0
   const yesterdaySeries = dailySeries.length > 1 ? dailySeries[dailySeries.length - 2] : null
   const yesterdayTotal = yesterdaySeries ? Number(yesterdaySeries.received || 0) + Number(yesterdaySeries.sent || 0) : 0
   const dailyChange = yesterdayTotal ? Math.round((dashboardTotal - yesterdayTotal) / yesterdayTotal * 100) : null
-  const botStats = new Map(periodBots.map((item) => [String(item.id), item]))
+  const botStats = new Map(todayBots.map((item) => [String(item.id), item]))
   const firstBot = bots[0]
   const memoryTotal = Number(system.memory_total || 0)
   const memoryText = online && memoryTotal

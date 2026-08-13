@@ -397,6 +397,16 @@ async def napcat_webui_credentials(bot_id: str, request: Request) -> dict[str, A
         raise HTTPException(400, str(error)) from error
 
 
+@router.get("/bots/{bot_id}/astrbot/webui")
+async def astrbot_webui_credentials(bot_id: str, request: Request) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(service(request).astrbot_webui_credentials, bot_id)
+    except DomainError as error:
+        raise HTTPException(error.status_code, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
 @router.post("/bots/{bot_id}/astrbot/password/reset")
 async def reset_astrbot_password(bot_id: str, request: Request) -> dict[str, Any]:
     try:

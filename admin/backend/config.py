@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-import json
+import base64
+import hmac
 import hashlib
+import json
 import os
 import re
 import secrets
 import shutil
 import string
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
@@ -289,6 +292,23 @@ def _hash_astrbot_dashboard_password(password: str) -> tuple[str, str]:
     return pbkdf2, hashlib.md5(password.encode("utf-8")).hexdigest()
 
 
+def _encode_astrbot_dashboard_jwt(username: str, secret: str, lifetime: int = 60) -> str:
+    """Create a short-lived HS256 token without importing AstrBot's runtime."""
+    def encode_part(value: object) -> str:
+        raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+    header = encode_part({"alg": "HS256", "typ": "JWT"})
+    payload = encode_part({
+        "username": username,
+        "exp": int(time.time()) + max(10, int(lifetime)),
+        "purpose": "qq-console-astrbot-webui",
+    })
+    signing_input = f"{header}.{payload}".encode("ascii")
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    return f"{header}.{payload}.{base64.urlsafe_b64encode(signature).rstrip(b'=').decode('ascii')}"
+
+
 def _napcat_log_file(bot_id: str) -> Path:
     return PROCESS_LOG_DIR / f"{bot_id}.napcat.log"
 
@@ -337,6 +357,24 @@ def astrbot_dashboard_status(bot_id: str, napcat_port: int) -> dict[str, object]
         "username": username,
         "password_configured": bool(dashboard.get("pbkdf2_password") or dashboard.get("password")),
         "password_change_required": bool(dashboard.get("password_change_required", False)),
+    }
+
+
+def astrbot_webui_credentials(bot_id: str, napcat_port: int) -> dict[str, object]:
+    """Return a short-lived URL that lets the local console enter AstrBot WebUI."""
+    _, config = _load_astrbot_config(bot_id)
+    dashboard = config.get("dashboard")
+    dashboard = dashboard if isinstance(dashboard, dict) else {}
+    username = str(dashboard.get("username") or "astrbot")
+    secret = str(dashboard.get("jwt_secret") or "")
+    base_url = f"http://127.0.0.1:{astrbot_dashboard_port(napcat_port)}"
+    if not secret:
+        return {"available": False, "url": base_url, "username": username}
+    token = _encode_astrbot_dashboard_jwt(username, secret)
+    return {
+        "available": bool(dashboard.get("enable", True)),
+        "url": f"{base_url}/?auto_login_token={quote(token, safe='')}",
+        "username": username,
     }
 
 

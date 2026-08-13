@@ -23,6 +23,11 @@ ACTIVE_OPERATION_STATES = {"queued", "running"}
 TRANSITION_STATES = {"starting", "stopping", "restarting", "logging_in"}
 DEFAULT_FRAMEWORK_STARTUP_TIMEOUT = 20.0
 ASTRBOT_STARTUP_TIMEOUT = 180.0
+SUPERVISOR_INTERVAL = 5.0
+SUPERVISOR_FAILURE_THRESHOLD = 3
+SUPERVISOR_STABLE_WINDOW = 60.0
+SUPERVISOR_RESTART_WINDOW = 600.0
+SUPERVISOR_MAX_RESTARTS = 5
 _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,6 +45,11 @@ class BotRuntime:
     last_log_at: float | None = None
     qr_login_requested: bool = False
     stop_requested: bool = False
+    desired_running: bool = False
+    failed_health_checks: int = 0
+    healthy_since: float | None = None
+    next_restart_at: float = 0.0
+    restart_history: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -82,6 +92,8 @@ class BotManager:
         self._stats_queue: asyncio.Queue[StatsRecord | None] | None = None
         self._stats_task: asyncio.Task[None] | None = None
         self._napcat_start_lock = asyncio.Lock()
+        self._supervisor_task: asyncio.Task[None] | None = None
+        self._shutting_down = False
         self.refresh_bot_index()
 
     def _runtime_for(self, bot_id: str) -> BotRuntime:
@@ -211,7 +223,85 @@ class BotManager:
                     break
             onebot = self.onebot.discover(bot)
             napcat = self.napcat.discover(bot)
+            runtime.desired_running = onebot is not None
             self._probe_cache[bot.id] = (time.monotonic(), onebot, napcat)
+
+    def start_supervisor(self) -> None:
+        if self._supervisor_task is None or self._supervisor_task.done():
+            self._supervisor_task = asyncio.create_task(self._supervisor_loop(), name="bot-process-supervisor")
+
+    async def _supervisor_loop(self) -> None:
+        """Continuously verify service readiness and recover unexpected exits."""
+        while not self._shutting_down:
+            try:
+                await asyncio.sleep(SUPERVISOR_INTERVAL)
+                for bot in self.repository.list():
+                    await self._supervise_bot(bot)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - one probe must never stop supervision
+                _LOGGER.exception("Bot 进程监督循环异常")
+
+    async def _supervise_bot(self, bot: BotConfig) -> None:
+        runtime = self._runtime_for(bot.id)
+        if not runtime.desired_running or runtime.stop_requested or self._active_operation(bot.id) is not None:
+            runtime.failed_health_checks = 0
+            runtime.healthy_since = None
+            return
+
+        onebot, napcat = await asyncio.to_thread(self._probe, bot, True)
+        framework_listener = await asyncio.to_thread(find_listening_process, bot.port)
+        healthy = onebot is not None and napcat is not None and framework_listener is not None
+        now = time.monotonic()
+        if healthy:
+            runtime.failed_health_checks = 0
+            if runtime.healthy_since is None:
+                runtime.healthy_since = now
+            elif now - runtime.healthy_since >= SUPERVISOR_STABLE_WINDOW:
+                runtime.restart_history.clear()
+                runtime.next_restart_at = 0.0
+            return
+
+        runtime.healthy_since = None
+        runtime.failed_health_checks += 1
+        if runtime.failed_health_checks < SUPERVISOR_FAILURE_THRESHOLD or now < runtime.next_restart_at:
+            return
+
+        runtime.restart_history = [
+            timestamp for timestamp in runtime.restart_history if now - timestamp < SUPERVISOR_RESTART_WINDOW
+        ]
+        if len(runtime.restart_history) >= SUPERVISOR_MAX_RESTARTS:
+            runtime.desired_running = False
+            runtime.last_error = "进程反复异常退出，已暂停自动恢复，请检查日志后手动启动"
+            await self._emit("ERROR", bot.name, runtime.last_error)
+            return
+
+        runtime.restart_history.append(now)
+        attempt = len(runtime.restart_history)
+        runtime.next_restart_at = now + min(60.0, 5.0 * (2 ** (attempt - 1)))
+        runtime.failed_health_checks = 0
+        async with self._lock_for(bot.id):
+            if runtime.stop_requested or not runtime.desired_running or self._active_operation(bot.id) is not None:
+                return
+            runtime.lifecycle = "restarting"
+            missing = []
+            if onebot is None or framework_listener is None:
+                missing.append("机器人框架")
+            if napcat is None:
+                missing.append("NapCat 协议端")
+            await self._emit("WARNING", bot.name, f"检测到{'、'.join(missing)}异常，正在自动恢复（第 {attempt} 次）")
+            try:
+                await self._stop_now(bot)
+                if runtime.stop_requested or self._shutting_down:
+                    return
+                await self._start_now(bot)
+                runtime.last_error = None
+                runtime.lifecycle = "running"
+                await self._emit("INFO", bot.name, "进程自动恢复成功")
+            except Exception as error:  # noqa: BLE001 - next check retries with backoff
+                runtime.last_error = f"自动恢复失败：{error}"
+                runtime.lifecycle = "error"
+                await self._emit("ERROR", bot.name, runtime.last_error)
 
     def get(self, bot_id: str) -> BotConfig:
         bot = self.repository.get(bot_id)
@@ -237,6 +327,8 @@ class BotManager:
                 "start": "starting",
                 "stop": "stopping",
                 "restart": "restarting",
+                "restart-framework": "restarting",
+                "restart-napcat": "restarting",
                 "login": "logging_in",
             }.get(operation.action, "starting")
         elif onebot is not None:
@@ -274,8 +366,17 @@ class BotManager:
             "error": runtime.last_error,
             "operation": operation.payload() if operation else None,
             "runtime": {
-                "framework": {"running": onebot is not None, "pid": onebot.pid if onebot else None},
+                "framework": {
+                    "running": onebot is not None,
+                    "pid": onebot.pid if onebot else None,
+                    "responsive": onebot is not None and find_listening_process(bot.port) is not None,
+                },
                 "napcat": {"running": napcat is not None, "pid": napcat.pid if napcat else None},
+                "supervisor": {
+                    "enabled": runtime.desired_running,
+                    "failed_checks": runtime.failed_health_checks,
+                    "restart_count": len(runtime.restart_history),
+                },
             },
         }
 
@@ -315,7 +416,7 @@ class BotManager:
         return operation
 
     async def request_action(self, bot_id: str, action: str) -> dict[str, Any]:
-        if action not in {"start", "stop", "restart"}:
+        if action not in {"start", "stop", "restart", "restart-framework", "restart-napcat"}:
             raise ValueError("无效的操作")
         bot = self.get(bot_id)
         async with self._lock_for(bot_id):
@@ -329,6 +430,7 @@ class BotManager:
                     # this lock so a stuck readiness wait cannot block cleanup.
                     runtime = self._runtime_for(bot_id)
                     runtime.stop_requested = True
+                    runtime.desired_running = False
                     operation = self._new_operation(bot_id, action)
                     active_task = self._tasks.get(active.id)
                     if active_task is not None and not active_task.done():
@@ -345,13 +447,22 @@ class BotManager:
             if action != "stop":
                 current = self.snapshot(bot)
                 if action == "start" and current["status"] in {"running", "login_required"}:
+                    runtime = self._runtime_for(bot_id)
+                    runtime.stop_requested = False
+                    runtime.desired_running = True
                     return self._action_response(bot_id, action, None)
 
             runtime = self._runtime_for(bot_id)
             if action in {"start", "restart"}:
                 runtime.stop_requested = False
+                runtime.desired_running = True
+            elif action in {"restart-framework", "restart-napcat"}:
+                # A component restart must not turn a stopped Bot into a
+                # supervisor-managed full Bot session.
+                runtime.stop_requested = False
             elif action == "stop":
                 runtime.stop_requested = True
+                runtime.desired_running = False
             operation = self._new_operation(bot_id, action)
             task = asyncio.create_task(self._run_operation(operation))
             self._tasks[operation.id] = task
@@ -363,6 +474,8 @@ class BotManager:
             "start": "starting",
             "stop": "stopping",
             "restart": "restarting",
+            "restart-framework": "restarting",
+            "restart-napcat": "restarting",
         }.get(action, runtime.lifecycle)
         if operation is None:
             status = runtime.lifecycle
@@ -383,6 +496,8 @@ class BotManager:
             "start": "starting",
             "stop": "stopping",
             "restart": "restarting",
+            "restart-framework": "restarting",
+            "restart-napcat": "restarting",
         }.get(operation.action, "starting")
         try:
             if wait_for is not None:
@@ -397,6 +512,12 @@ class BotManager:
                 await self._stop_now(bot)
                 await self._start_now(bot)
                 await self._emit("INFO", bot.name, f"Bot 已重启，监听端口 {bot.port}")
+            elif operation.action == "restart-framework":
+                await self._restart_framework_now(bot)
+                await self._emit("INFO", bot.name, f"机器人框架已重启，监听端口 {bot.port}")
+            elif operation.action == "restart-napcat":
+                await self._restart_napcat_now(bot)
+                await self._emit("INFO", bot.name, "NapCat 协议端已重启")
             operation.status = "succeeded"
             runtime.last_error = None
         except asyncio.CancelledError:
@@ -416,9 +537,10 @@ class BotManager:
             self._trim_operations()
 
     async def _start_now(self, bot: BotConfig, quick_login: str | None = None) -> None:
+        runtime = self._runtime_for(bot.id)
+        runtime.desired_running = True
         if self.onebot.discover(bot) is not None:
             return
-        runtime = self._runtime_for(bot.id)
         runtime.login_state = "unknown"
         runtime.qr_login_requested = False
         self.onebot.prepare(bot)
@@ -432,6 +554,58 @@ class BotManager:
             await self._stop_now(bot)
             raise
         self._invalidate_probe(bot.id)
+
+    async def _restart_framework_now(self, bot: BotConfig) -> None:
+        """Restart only the selected framework, keeping NapCat alive."""
+        pids = self.onebot.process_ids_for_bot(bot)
+        remaining = await terminate_processes(pids, timeout=7.0)
+        self.onebot.forget(bot.id)
+        if remaining:
+            raise OperationError(f"机器人框架仍有进程未退出：{', '.join(str(pid) for pid in sorted(remaining))}")
+        self.onebot.prepare(bot)
+        self.napcat.sync_onebot_port(bot)
+        await self.onebot.start(bot)
+        await self._wait_for_framework_ready(bot)
+        self._invalidate_probe(bot.id)
+
+    async def _restart_napcat_now(self, bot: BotConfig) -> None:
+        """Restart only NapCat, keeping the selected framework alive."""
+        pids = self.napcat.process_ids_for_bot(bot)
+        remaining = await terminate_processes(pids, timeout=7.0)
+        self.napcat.forget(bot.id)
+        if remaining:
+            raise OperationError(f"NapCat 协议端仍有进程未退出：{', '.join(str(pid) for pid in sorted(remaining))}")
+        self.napcat.sync_onebot_port(bot)
+        async with self._napcat_start_lock:
+            await self.napcat.start(bot, quick_login=bot.qq)
+        await self._wait_for_napcat_ready(bot)
+        self._invalidate_probe(bot.id)
+
+    async def _wait_for_framework_ready(self, bot: BotConfig, timeout: float | None = None) -> None:
+        framework_label = "AstrBot" if bot.framework == "astrbot" else "NoneBot"
+        startup_timeout = timeout if timeout is not None else (
+            ASTRBOT_STARTUP_TIMEOUT if bot.framework == "astrbot" else DEFAULT_FRAMEWORK_STARTUP_TIMEOUT
+        )
+        deadline = time.monotonic() + startup_timeout
+        while time.monotonic() < deadline:
+            if find_listening_process(bot.port) is not None and self.onebot.discover(bot) is not None:
+                return
+            if self.onebot.tracked_process(bot.id) is None:
+                raise OperationError(
+                    f"Bot「{bot.name}」重启失败：{framework_label} 进程已退出，端口 {bot.port} 未监听"
+                )
+            await asyncio.sleep(0.25)
+        raise OperationError(f"Bot「{bot.name}」重启超时：{framework_label} 未在端口 {bot.port} 监听")
+
+    async def _wait_for_napcat_ready(self, bot: BotConfig, timeout: float = 20.0) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.napcat.discover(bot) is not None:
+                return
+            if self.napcat.tracked_process(bot.id) is None:
+                raise OperationError(f"Bot「{bot.name}」重启失败：NapCat 进程已退出")
+            await asyncio.sleep(0.25)
+        raise OperationError(f"Bot「{bot.name}」重启超时：NapCat 进程未保持运行")
 
     async def _wait_for_ready(self, bot: BotConfig, timeout: float | None = None) -> None:
         framework_label = "AstrBot" if bot.framework == "astrbot" else "NoneBot"
@@ -514,6 +688,7 @@ class BotManager:
     async def _run_login(self, operation: BotOperation, qq: str, use_password: bool = True) -> None:
         bot = self.get(operation.bot_id)
         runtime = self._runtime_for(bot.id)
+        runtime.desired_running = True
         operation.status = "running"
         runtime.lifecycle = "logging_in"
         if not use_password:
@@ -574,6 +749,7 @@ class BotManager:
         task: asyncio.Task[None] | None = None
         async with self._lock_for(bot_id):
             self._runtime_for(bot_id).stop_requested = True
+            self._runtime_for(bot_id).desired_running = False
             active = self._active_operation(bot_id)
             if active is not None:
                 task = self._tasks.get(active.id)
@@ -599,8 +775,16 @@ class BotManager:
             self._operations.pop(item.id, None)
 
     async def shutdown(self) -> None:
+        self._shutting_down = True
+        supervisor_task = self._supervisor_task
+        if supervisor_task is not None:
+            supervisor_task.cancel()
+            await asyncio.gather(supervisor_task, return_exceptions=True)
+        self._supervisor_task = None
         tasks = tuple(self._tasks.values())
         if tasks:
+            for task in tasks:
+                task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
         stats_task = self._stats_task
         stats_queue = self._stats_queue
@@ -619,4 +803,11 @@ class BotManager:
 
 
 def _action_label(action: str) -> str:
-    return {"start": "启动", "stop": "停止", "restart": "重启", "login": "登录"}.get(action, action)
+    return {
+        "start": "启动",
+        "stop": "停止",
+        "restart": "重启",
+        "restart-framework": "重启机器人框架",
+        "restart-napcat": "重启 NapCat 协议端",
+        "login": "登录",
+    }.get(action, action)
