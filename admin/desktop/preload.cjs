@@ -15,6 +15,11 @@ contextBridge.exposeInMainWorld('windowControls', {
   close: () => ipcRenderer.send('window-close'),
 })
 
+contextBridge.exposeInMainWorld('desktopConfig', {
+  get: () => ipcRenderer.invoke('get-desktop-config'),
+  setTrayOnClose: (enabled) => ipcRenderer.send('set-tray-on-close', Boolean(enabled)),
+})
+
 contextBridge.exposeInMainWorld('externalLinks', {
   open: (url) => ipcRenderer.invoke('open-external', url),
 })

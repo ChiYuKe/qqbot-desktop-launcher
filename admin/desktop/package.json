@@ -22,7 +22,8 @@
       "main.cjs",
       "preload.cjs",
       "package.json",
-      "assets/icon.ico"
+      "assets/icon.ico",
+      "lib/**"
     ],
     "extraResources": [
       {

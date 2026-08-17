@@ -33,3 +33,12 @@ npm run dist:win
 打包完成后，启动程序位于项目根目录的 `release\QQBot-Desktop-Launcher-Portable.exe` 和 `release\QQBot-Desktop-Launcher-Setup.exe`。两种版本都包含前端、管理 API 和 Python 运行时，可以发给其他 Windows 用户直接安装运行；用户首次配置 Bot 时，再从向导下载 NapCat、NoneBot 或 AstrBot 资源到用户数据目录。
 
 `release\win-unpacked` 是 Electron 的内部解包目录，不要单独复制或运行其中的 exe。
+
+## 托盘模式
+
+- 关闭主窗口（标题栏 × 或 Alt+F4）会最小化到系统托盘，管理服务和 QQ 机器人继续在后台运行
+- 托盘图标悬停可查看管理服务状态（运行中 / 离线）
+- 左键点击（或双击）托盘图标：重新打开主窗口
+- 右键托盘图标：菜单提供「打开主窗口」和「退出 QQBot」
+- 首次最小化到托盘时会弹出气泡提示；真正的退出请使用托盘菜单，或直接结束进程
+- 可在面板「系统设置 → 常规 → 托盘模式」关闭该行为：关闭后点击窗口 × 会直接退出程序；设置保存在本机（`%APPDATA%\qqbot-desktop-launcher\desktop-config.json`），重启后仍然生效
