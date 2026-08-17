@@ -49,6 +49,14 @@ button:disabled { opacity: .45; cursor: wait; }
 .app-runtime-error-card p { margin: 0; color: #697382; font-size: 13px; line-height: 1.6; }
 .app-runtime-error-card code { overflow: auto; padding: 10px 12px; color: #9b3f4d; background: #fff3f4; border-radius: 8px; font: 12px/1.5 ui-monospace, Consolas, monospace; }
 .app-runtime-error-card button { justify-self: start; height: 34px; padding: 0 14px; color: #fff; background: #2f80ed; border-radius: 8px; font-size: 12px; font-weight: 650; }
+.app-runtime-error-card .app-runtime-error-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.app-runtime-error-card .app-runtime-error-actions button { justify-self: start; }
+.app-runtime-error-card .app-runtime-error-actions button:nth-child(2) { color: #2f80ed; background: #eaf3ff; }
+.app-runtime-error-card .app-runtime-error-actions button:nth-child(3) { color: #2f80ed; background: #eaf3ff; }
+.app-runtime-error-card .app-runtime-error-hint { font-size: 12px; color: #8a94a6; }
+.app-runtime-error-card details.app-runtime-error-stack { border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
+.app-runtime-error-card details.app-runtime-error-stack summary { padding: 8px 12px; color: #4a5568; font-size: 12px; cursor: pointer; user-select: none; }
+.app-runtime-error-card details.app-runtime-error-stack pre { max-height: 260px; overflow: auto; margin: 0; padding: 0 12px 12px; color: #6b7280; font: 11px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
 
 .app-shell { position: relative; height: 100vh; min-height: 0; user-select: none; }
 .app-shell::after { position: fixed; inset: 1px; z-index: 10; pointer-events: none; content: ''; border: 1px solid rgba(54, 48, 88, .08); box-shadow: 0 0 22px rgba(54, 48, 88, .16); }
@@ -1986,6 +1994,27 @@ body { overflow: hidden; }
 .service-entry > span:nth-child(2) { min-width: 0; display: grid; gap: 3px; flex: 1; }
 .service-entry strong { color: inherit; font-size: 11px; }
 .service-entry small { color: var(--muted); font-size: 10px; }
+.cache-summary { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; padding: 17px; background: var(--panel); border: 1px solid var(--line); border-radius: 11px; }
+.cache-summary > div:first-child { min-width: 0; display: grid; gap: 4px; }
+.cache-summary span { color: var(--muted); font-size: 11px; }
+.cache-summary strong { color: var(--ink); font-size: 24px; font-weight: 700; letter-spacing: -.02em; }
+.cache-summary small { color: var(--muted); font-size: 10px; }
+.cache-summary-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.cache-summary-actions .secondary { display: inline-flex; align-items: center; gap: 6px; height: 31px; }
+.cache-list { display: grid; gap: 8px; padding: 13px 0 16px; }
+.cache-item { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 11px 9px; border: 1px solid transparent; border-radius: 8px; transition: background .14s ease, border-color .14s ease; }
+.cache-item:hover { background: var(--surface-strong); border-color: var(--line); }
+.cache-item-icon { width: 31px; height: 31px; display: grid; place-items: center; flex: none; color: var(--accent); background: var(--selected); border-radius: 7px; }
+.cache-item-copy { min-width: 0; display: grid; gap: 4px; flex: 1; }
+.cache-item-copy strong { overflow: hidden; color: var(--ink); font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.cache-item-copy span { color: var(--muted); font-size: 10px; line-height: 1.45; }
+.cache-item-copy small { overflow: hidden; color: var(--subtle); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.cache-item-copy em { color: var(--yellow); font-size: 9px; font-style: normal; }
+.cache-item-actions { display: flex; align-items: center; gap: 12px; flex: none; }
+.cache-item-actions > strong { min-width: 65px; color: var(--ink); font-size: 11px; font-weight: 650; text-align: right; }
+.cache-item-actions .secondary { min-width: 65px; height: 29px; padding: 0 9px; font-size: 10px; }
+.cache-empty { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 78px; color: var(--muted); font-size: 11px; }
+.cache-empty svg { color: var(--accent); }
 .settings-search-empty { padding: 9px 10px; color: var(--muted); font-size: 11px; }
 :root[data-density="compact"] .settings-row { min-height: 54px; padding-top: 8px; padding-bottom: 8px; }
 :root[data-density="compact"] .settings-panel-heading { padding-top: 14px; padding-bottom: 11px; }
