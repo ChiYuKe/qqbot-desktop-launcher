@@ -36,6 +36,7 @@ class BotRepository:
         self.database_file.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
         self._migrate_legacy_json()
+        self._repair_relocated_scripts()
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_file)
@@ -102,6 +103,37 @@ class BotRepository:
                     )
                 except (KeyError, TypeError, ValueError, sqlite3.IntegrityError):
                     continue
+
+    def _repair_relocated_scripts(self) -> None:
+        """Point managed scripts at the current project's scripts directory.
+
+        Bot records historically stored absolute paths.  A moved project can
+        leave the old directory in place, so checking only ``exists()`` is not
+        enough: prefer the same generated script under the current data root
+        whenever it is available.
+        """
+        scripts_dir = self.legacy_file.parent / "scripts"
+        if not scripts_dir.is_dir():
+            return
+
+        with self._connection() as connection:
+            rows = connection.execute("SELECT id, script FROM bots").fetchall()
+            for row in rows:
+                configured = Path(str(row["script"] or "")).expanduser()
+                if not configured.name:
+                    continue
+                relocated = scripts_dir / configured.name
+                if not relocated.is_file():
+                    continue
+                try:
+                    unchanged = configured.resolve() == relocated.resolve()
+                except OSError:
+                    unchanged = str(configured) == str(relocated)
+                if not unchanged:
+                    connection.execute(
+                        "UPDATE bots SET script = ? WHERE id = ?",
+                        (str(relocated.resolve()), row["id"]),
+                    )
 
     def list(self) -> list[BotConfig]:
         with self._connection() as connection:

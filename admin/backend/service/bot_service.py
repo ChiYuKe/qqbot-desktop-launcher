@@ -13,6 +13,7 @@ from backend.domain.models import BotConfig
 from backend.event.bus import EventBus
 from backend.manager.bot_manager import BotManager
 from backend.security.secrets import protect_secret
+from backend.service.cache_service import CacheService
 from backend.service.resource_setup import ResourceSetupManager
 
 
@@ -23,6 +24,7 @@ class BotService:
         self.event_bus = event_bus
         self.stats = stats
         self.resource_setup = ResourceSetupManager()
+        self.cache = CacheService()
 
     async def shutdown(self) -> None:
         await self.resource_setup.shutdown()
@@ -239,3 +241,39 @@ class BotService:
 
     def resource_setup_status(self, job_id: str | None = None) -> dict:
         return self.resource_setup.status(job_id)
+
+    def _cache_context(self) -> dict[str, object]:
+        bots = self.manager.list()
+        active_statuses = {"running", "starting", "restarting", "login_required"}
+        return {
+            "running_bot_ids": {
+                str(bot["id"])
+                for bot in bots
+                if bot.get("status") in active_statuses
+            },
+            "running_astrbot_bot_ids": {
+                str(bot["id"])
+                for bot in bots
+                if bot.get("framework") == "astrbot" and bot.get("status") in active_statuses
+            },
+            "nonebot_running": any(
+                bot.get("framework") == "nonebot"
+                and bot.get("status") in active_statuses
+                for bot in bots
+            ),
+            "astrbot_running": any(
+                bot.get("framework") == "astrbot" and bot.get("status") in active_statuses
+                for bot in bots
+            ),
+            "setup_running": self.resource_setup.status().get("status") == "running",
+            "bot_labels": {str(bot["id"]): str(bot.get("name") or bot["id"]) for bot in bots},
+        }
+
+    def cache_snapshot(self) -> dict:
+        return self.cache.snapshot(**self._cache_context())
+
+    def clear_cache(self, cache_id: str) -> dict:
+        return self.cache.clear(cache_id, **self._cache_context())
+
+    def clear_all_cache(self) -> dict:
+        return self.cache.clear_all(**self._cache_context())

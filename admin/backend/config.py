@@ -49,8 +49,41 @@ def _load_resource_paths() -> dict[str, str]:
 
 
 _resource_paths = _load_resource_paths()
-NONEBOT_DIR = Path(os.getenv("NONEBOT_DIR", _resource_paths.get("nonebot_dir") or DEFAULT_NONEBOT_DIR))
-ASTRBOT_DIR = Path(os.getenv("ASTRBOT_DIR", _resource_paths.get("astrbot_dir") or DEFAULT_ASTRBOT_DIR))
+
+
+def _relocate_project_path(raw_path: object) -> Path:
+    """Rebase a persisted project path when the whole project was moved.
+
+    Resource settings are stored as absolute paths for the desktop app, but
+    the project itself is portable.  If a saved path contains the current
+    project directory name and the equivalent path exists below ``ROOT``, use
+    that path instead of the stale location.
+    """
+    candidate = Path(str(raw_path or "")).expanduser()
+    if not candidate.is_absolute():
+        return candidate
+
+    root_name = ROOT.name.casefold()
+    parts = candidate.parts
+    for index, part in enumerate(parts[:-1]):
+        if part.casefold() != root_name:
+            continue
+        relocated = ROOT.joinpath(*parts[index + 1:])
+        if relocated.exists():
+            return relocated.resolve()
+        break
+    return candidate
+
+
+def _configured_project_path(env_name: str, setting_name: str, default: Path) -> Path:
+    configured = os.getenv(env_name)
+    if configured:
+        return Path(configured).expanduser()
+    return _relocate_project_path(_resource_paths.get(setting_name) or default)
+
+
+NONEBOT_DIR = _configured_project_path("NONEBOT_DIR", "nonebot_dir", DEFAULT_NONEBOT_DIR)
+ASTRBOT_DIR = _configured_project_path("ASTRBOT_DIR", "astrbot_dir", DEFAULT_ASTRBOT_DIR)
 
 
 def _resolve_napcat_paths(configured_path: Path) -> tuple[Path, Path]:
@@ -107,7 +140,7 @@ def _resolve_napcat_paths(configured_path: Path) -> tuple[Path, Path]:
 
 
 NAPCAT_DIR, NAPCAT_EXE = _resolve_napcat_paths(
-    Path(os.getenv("NAPCAT_DIR", _resource_paths.get("napcat_dir") or DEFAULT_NAPCAT_DIR))
+    _configured_project_path("NAPCAT_DIR", "napcat_dir", DEFAULT_NAPCAT_DIR)
 )
 
 

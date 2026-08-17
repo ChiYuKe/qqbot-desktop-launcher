@@ -117,6 +117,27 @@ async def runtime_resources(request: Request) -> dict[str, Any]:
     return await asyncio.to_thread(service(request).resources)
 
 
+@router.get("/cache")
+async def cache_snapshot(request: Request) -> dict[str, Any]:
+    return await asyncio.to_thread(service(request).cache_snapshot)
+
+
+@router.post("/cache/clear")
+async def clear_all_cache(request: Request) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(service(request).clear_all_cache)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@router.delete("/cache/{cache_id}")
+async def clear_cache(cache_id: str, request: Request) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(service(request).clear_cache, cache_id)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
 @router.get("/stats")
 async def message_stats(request: Request) -> dict[str, Any]:
     repository = request.app.state.repository
