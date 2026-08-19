@@ -35,6 +35,8 @@ SCRIPT_DIR = DATA_DIR / "scripts"
 PROCESS_LOG_DIR = DATA_DIR / "process-logs"
 # 控制台插件启停状态（plugin_id -> enabled 布尔值），独立于插件目录本身。
 CONSOLE_PLUGIN_STATE_FILE = DATA_DIR / "console-plugins.json"
+# 控制台插件配置（plugin_id -> JSON 对象），与启停状态分开保存。
+CONSOLE_PLUGIN_SETTINGS_FILE = DATA_DIR / "console-plugin-settings.json"
 
 DEFAULT_NONEBOT_DIR = PROGRAM_DIR / "NoneBot"
 DEFAULT_ASTRBOT_DIR = PROGRAM_DIR / "AstrBot"

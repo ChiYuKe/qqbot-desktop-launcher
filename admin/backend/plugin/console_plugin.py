@@ -12,7 +12,7 @@
 运行期加载语义：
 
 - 后端：管理服务启动时扫描并 ``import`` 每个插件的 ``backend.py``，调用
-  ``register(app)``；修改后端代码后需要重启管理服务（桌面端会托管重启）。
+  ``register(app)``；插件可额外提供 ``shutdown()``，在控制台停用时释放子进程等资源；修改后端代码后需要重启管理服务（桌面端会托管重启）。
 - 前端：控制台页面加载时从 ``/api/console-plugins`` 读取清单，再从
   ``/plugin-assets/<id>/frontend.js`` 动态加载脚本；修改前端代码后刷新页面即可。
 """
@@ -45,6 +45,16 @@ _PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _ASSET_SUFFIXES = {".js", ".mjs", ".css", ".json", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".woff", ".woff2"}
 _MAX_MANIFEST_BYTES = 128 * 1024
 _MAX_DOCUMENTATION_BYTES = 512 * 1024
+_MAX_PLUGIN_SETTINGS_BYTES = 256 * 1024
+# 插件目录中的声明式配置模式文件。存在时，宿主会用通用表单渲染器自动
+# 生成配置页，无需插件注册自定义 settings 组件。
+_SETTINGS_SCHEMA_FILENAME = "settings.json"
+_MAX_SETTINGS_SCHEMA_BYTES = 128 * 1024
+# 配置模式中允许的字段类型。
+_SETTINGS_FIELD_TYPES = {
+    "text", "textarea", "number", "boolean", "toggle", "select",
+    "directory", "file", "slider", "color", "key-value", "password",
+}
 _GIT_CLONE_TIMEOUT_SECONDS = 120
 _GIT_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,127}$")
 _GIT_SCP_URL_RE = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[^\s\\]+$")
@@ -86,9 +96,12 @@ class ConsolePluginRegistry:
         self.plugins: dict[str, dict[str, Any]] = {}
         self.errors: dict[str, str] = {}
         self._states: dict[str, bool] = {}
+        self._settings: dict[str, dict[str, Any]] = {}
+        self._backend_modules: dict[str, Any] = {}
         self._app: FastAPI | None = None
         self._install_lock = threading.Lock()
         self._load_states()
+        self._load_settings()
         self.discover()
 
     def discover(self) -> None:
@@ -137,6 +150,52 @@ class ConsolePluginRegistry:
             return None
         return raw
 
+    def _read_settings_schema(self, directory: Path) -> list[dict[str, Any]] | None:
+        """Read and normalize a plugin's declarative settings schema.
+
+        Returns ``None`` when the plugin has no ``settings.json`` (so hosts keep
+        using a registered custom settings component if any).  A malformed
+        schema is recorded in ``self.errors`` and treated as absent so a broken
+        config file never breaks the control panel.
+        """
+        path = directory / _SETTINGS_SCHEMA_FILENAME
+        try:
+            if not path.is_file():
+                return None
+            if path.stat().st_size > _MAX_SETTINGS_SCHEMA_BYTES:
+                raise ValueError(f"{_SETTINGS_SCHEMA_FILENAME} 超过 128 KiB 限制")
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"无法解析 {_SETTINGS_SCHEMA_FILENAME}") from error
+        if isinstance(raw, dict) and isinstance(raw.get("fields"), list):
+            fields = raw["fields"]
+        elif isinstance(raw, list):
+            fields = raw
+        else:
+            raise ValueError(f"{_SETTINGS_SCHEMA_FILENAME} 必须是对象或字段数组")
+        normalized: list[dict[str, Any]] = []
+        for index, field in enumerate(fields):
+            if not isinstance(field, dict):
+                continue
+            item: dict[str, Any] = {}
+            for key in ("id", "type", "label", "description", "default", "required",
+                        "placeholder", "min", "max", "step", "rows", "options",
+                        "marks", "keyLabel", "valueLabel", "secret", "multiple"):
+                if key in field:
+                    item[key] = field[key]
+            field_id = str(item.get("id") or "").strip()
+            if not _PLUGIN_ID_RE.fullmatch(field_id):
+                continue
+            field_type = str(item.get("type") or "text").strip()
+            if field_type not in _SETTINGS_FIELD_TYPES:
+                field_type = "text"
+            item["type"] = field_type
+            item["index"] = index
+            normalized.append(item)
+        if not normalized:
+            raise ValueError(f"{_SETTINGS_SCHEMA_FILENAME} 没有有效的配置字段")
+        return normalized
+
     def snapshot(self) -> dict[str, Any]:
         """Return the plugin list for the frontend, omitting internal fields."""
         return {
@@ -145,6 +204,7 @@ class ConsolePluginRegistry:
                     **{key: value for key, value in manifest.items() if not key.startswith("_")},
                     "folder": Path(str(manifest["_dir"])).name,
                     "enabled": self.is_enabled(plugin_id),
+                    "settingsSchema": self._settings_schema_for(plugin_id, manifest),
                 }
                 for plugin_id, manifest in self.plugins.items()
             ],
@@ -152,7 +212,37 @@ class ConsolePluginRegistry:
             "directory": str(self.plugins_dir),
         }
 
-    # ---- 启用 / 停用状态 -------------------------------------------------
+    def _settings_schema_for(self, plugin_id: str, manifest: dict[str, Any]) -> list[dict[str, Any]] | None:
+        """Return the declarative settings schema for a plugin, or ``None``.
+
+        The schema is read directly from the plugin directory rather than
+        stored in the manifest so that ``discover()`` (which reuses manifests)
+        always reflects the on-disk ``settings.json``.  A malformed schema is
+        recorded in ``self.errors`` and reported as absent.
+        """
+        try:
+            schema = self._read_settings_schema(Path(str(manifest["_dir"])))
+        except ValueError as error:
+            self.errors[plugin_id] = str(error)
+            schema = None
+        return schema
+
+    def refresh(self) -> None:
+        """Rescan plugin directories and load newly discovered backends."""
+        with self._install_lock:
+            existing_ids = set(self.plugins)
+            self.discover()
+            if self._app is None:
+                return
+            for plugin_id in sorted(set(self.plugins) - existing_ids):
+                if self.is_enabled(plugin_id):
+                    self._load_backend_for(plugin_id, self._app)
+
+    def refresh_snapshot(self) -> dict[str, Any]:
+        """Rescan plugins before returning the authenticated plugin list."""
+        self.refresh()
+        return self.snapshot()
+
 
     def _load_states(self) -> None:
         """加载插件启停状态文件；文件缺失或损坏时全部视为启用。"""
@@ -176,14 +266,87 @@ class ConsolePluginRegistry:
         except OSError:
             _LOGGER.exception("控制台插件启停状态写入失败")
 
+    def _load_settings(self) -> None:
+        """加载控制台插件配置；文件缺失或损坏时使用插件默认值。"""
+        try:
+            raw = json.loads(runtime_config.CONSOLE_PLUGIN_SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                self._settings = {
+                    str(key): value
+                    for key, value in raw.items()
+                    if isinstance(value, dict)
+                }
+        except (OSError, UnicodeError, ValueError):
+            self._settings = {}
+
+    def _save_settings(self) -> None:
+        """原子写控制台插件配置。"""
+        try:
+            runtime_config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+            temporary = runtime_config.CONSOLE_PLUGIN_SETTINGS_FILE.with_suffix(".json.tmp")
+            temporary.write_text(
+                json.dumps(self._settings, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            temporary.replace(runtime_config.CONSOLE_PLUGIN_SETTINGS_FILE)
+        except OSError:
+            _LOGGER.exception("控制台插件配置写入失败")
+
+    def get_settings(self, plugin_id: str) -> dict[str, Any]:
+        """返回插件配置的副本，避免插件直接修改注册表内部状态。"""
+        if plugin_id not in self.plugins:
+            raise ValueError(f"插件不存在：{plugin_id}")
+        return dict(self._settings.get(plugin_id, {}))
+
+    def set_settings(self, plugin_id: str, settings: dict[str, Any]) -> None:
+        """校验并保存插件配置，然后通知已加载的插件后端。"""
+        if plugin_id not in self.plugins:
+            raise ValueError(f"插件不存在：{plugin_id}")
+        if not isinstance(settings, dict):
+            raise ValueError("插件配置必须是 JSON 对象")
+        try:
+            serialized = json.dumps(settings, ensure_ascii=False, separators=(",", ":"))
+            normalized = json.loads(serialized)
+        except (TypeError, ValueError) as error:
+            raise ValueError("插件配置必须是有效的 JSON") from error
+        if len(serialized.encode("utf-8")) > _MAX_PLUGIN_SETTINGS_BYTES:
+            raise ValueError("插件配置不能超过 256 KiB")
+
+        previous = self._settings.get(plugin_id, {})
+        self._settings[plugin_id] = normalized
+        self._save_settings()
+        if previous == normalized:
+            return
+        module = self._backend_modules.get(plugin_id)
+        on_settings_changed = getattr(module, "on_settings_changed", None)
+        if callable(on_settings_changed):
+            try:
+                on_settings_changed(dict(normalized))
+            except Exception:  # noqa: BLE001 - a settings hook must not break the API
+                _LOGGER.exception("控制台插件 %s 配置变更回调失败", plugin_id)
+
     def is_enabled(self, plugin_id: str) -> bool:
         """插件是否启用。未记录状态时默认启用。"""
         return self._states.get(plugin_id, True)
 
+    def _shutdown_backend_for(self, plugin_id: str) -> None:
+        module = self._backend_modules.pop(plugin_id, None)
+        if module is None:
+            return
+        shutdown = getattr(module, "shutdown", None)
+        if not callable(shutdown):
+            return
+        try:
+            shutdown()
+        except Exception:  # noqa: BLE001 - one plugin must not block its own disable action
+            _LOGGER.exception("控制台插件 %s 停用清理失败", plugin_id)
+
     def set_enabled(self, plugin_id: str, enabled: bool) -> None:
-        """记录插件启停状态；启用时若后端尚未注册则补加载。"""
+        """记录插件启停状态；停用时清理后端，启用时补加载。"""
         if plugin_id not in self.plugins:
             raise ValueError(f"插件不存在：{plugin_id}")
+        if not enabled:
+            self._shutdown_backend_for(plugin_id)
         self._states[plugin_id] = bool(enabled)
         self._save_states()
         if enabled:
@@ -235,6 +398,7 @@ class ConsolePluginRegistry:
             if not callable(register):
                 raise ImportError("backend.py 缺少 register(app) 函数")
             register(app)
+            self._backend_modules[plugin_id] = module
             _LOGGER.info("已加载控制台插件后端 %s", plugin_id)
             return True
         except Exception as error:  # noqa: BLE001 - a broken plugin must not kill the console

@@ -1,0 +1,8 @@
+{
+  "id": "settings-demo",
+  "name": "配置渲染示例",
+  "version": "1.0.0",
+  "description": "演示声明式配置模式：根据插件目录里的 settings.json 自动渲染输入框、滑动条、开关、下拉、目录选择等全部控件类型，无需编写任何前端代码。",
+  "author": "QQ 控制台",
+  "readme": "README.md"
+}

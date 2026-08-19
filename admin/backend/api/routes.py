@@ -60,6 +60,10 @@ class PluginTogglePayload(BaseModel):
     enabled: bool
 
 
+class PluginSettingsPayload(BaseModel):
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
 class GitPluginInstallPayload(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     ref: str | None = Field(default=None, max_length=128)
@@ -209,7 +213,27 @@ async def list_plugins(request: Request) -> dict[str, Any]:
 
 @router.get("/console-plugins")
 async def list_console_plugins(request: Request) -> dict[str, Any]:
-    return await asyncio.to_thread(request.app.state.console_plugin_registry.snapshot)
+    return await asyncio.to_thread(request.app.state.console_plugin_registry.refresh_snapshot)
+
+
+@router.get("/console-plugins/{plugin_id}/settings")
+async def get_console_plugin_settings(plugin_id: str, request: Request) -> dict[str, Any]:
+    try:
+        settings = await asyncio.to_thread(request.app.state.console_plugin_registry.get_settings, plugin_id)
+    except ValueError as error:
+        raise HTTPException(404, str(error)) from error
+    return {"settings": settings}
+
+
+@router.put("/console-plugins/{plugin_id}/settings")
+async def update_console_plugin_settings(plugin_id: str, payload: PluginSettingsPayload, request: Request) -> dict[str, Any]:
+    try:
+        await asyncio.to_thread(request.app.state.console_plugin_registry.set_settings, plugin_id, payload.settings)
+        settings = await asyncio.to_thread(request.app.state.console_plugin_registry.get_settings, plugin_id)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    await request.app.state.event_bus.publish("INFO", "系统", f"已保存控制台插件「{plugin_id}」配置")
+    return {"settings": settings}
 
 
 @router.get("/console-plugins/{plugin_id}/readme")
