@@ -1,7 +1,7 @@
 {
   "id": "example-plugin",
   "name": "系统监控",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "示例插件：实时展示本机 CPU、内存、磁盘和进程信息，演示插件系统的完整能力（前端页面 + 后端 API + 插件样式）。",
   "author": "QQ 控制台",
   "readme": "README.md",

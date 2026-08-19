@@ -1,7 +1,7 @@
 """示例插件后端入口：系统监控数据接口。
 
 使用 psutil 采集本机资源信息。与全系统监控不同，进程列表只返回与
-QQBot Desktop Launcher 相关的进程：桌面控制台、管理后端、各账号的
+QQBot Desktop Launcher 相关的进程：桌面控制台、管理后端、DeepSeek Harness WebUI、各账号的
 Bot 框架（NoneBot / AstrBot）与 NapCat 协议端。
 """
 
@@ -120,6 +120,7 @@ async def processes(request: Request) -> dict[str, Any]:
     分组：
     - console    桌面控制台（Electron 主进程及子进程）
     - backend    管理后端（FastAPI 服务）
+    - deepseek   DeepSeek Harness WebUI
     - framework  Bot 框架（NoneBot / AstrBot）
     - napcat     NapCat 协议端
     """
@@ -130,6 +131,7 @@ async def processes(request: Request) -> dict[str, Any]:
     groups = {
         "console": {"label": "桌面控制台", "count": 0},
         "backend": {"label": "管理后端", "count": 0},
+        "deepseek": {"label": "DeepSeek Harness", "count": 0},
         "framework": {"label": "Bot 框架", "count": 0},
         "napcat": {"label": "NapCat 协议端", "count": 0},
     }
@@ -206,6 +208,15 @@ async def processes(request: Request) -> dict[str, Any]:
                     add(psutil.Process(napcat_pid), "napcat", "NapCat", bot.name)
                 except psutil.Error:
                     pass
+
+    # 4. 由 DeepSeek Harness 插件实际启动的 WebUI 进程树。
+    dsh_provider = getattr(request.app.state, "deepseek_harness_processes", None)
+    if callable(dsh_provider):
+        try:
+            for process in dsh_provider():
+                add(process, "deepseek", "DeepSeek Harness")
+        except Exception:  # noqa: BLE001 - optional plugin status must not break monitoring
+            pass
 
     rows.sort(key=lambda item: (item["kind"], item["bot_name"] or "", item["pid"]))
     # 清理不再被采集的进程的采样缓存，避免缓存膨胀。

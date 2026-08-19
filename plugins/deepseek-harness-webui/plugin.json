@@ -1,0 +1,10 @@
+{
+  "id": "deepseek-harness-webui",
+  "name": "DeepSeek Harness WebUI",
+  "version": "1.4.0",
+  "description": "在顶部 WebUI 切换菜单中启动并打开本机 DeepSeek Harness WebUI，并支持配置 checkout 目录和端口。",
+  "author": "QQ 控制台",
+  "readme": "README.md",
+  "frontend": "frontend.js",
+  "backend": "backend.py"
+}

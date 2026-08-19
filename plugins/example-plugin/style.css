@@ -112,30 +112,6 @@
   letter-spacing: -.3px;
 }
 
-.monitor-process-groups {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 12px;
-  margin-bottom: 20px;
-}
-
-.monitor-process-group {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 12px 16px;
-  background: var(--panel, #f0f2f5);
-  border-radius: 10px;
-  font-size: 12px;
-  color: var(--muted, #6b7685);
-}
-
-.monitor-process-group strong {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--ink, #2c3e50);
-}
-
 .monitor-kind {
   display: inline-block;
   padding: 2px 8px;
@@ -147,6 +123,7 @@
 
 .monitor-kind.console { background: #eef2ff; color: #4f46e5; }
 .monitor-kind.backend { background: #f0fdf4; color: #16a34a; }
+.monitor-kind.deepseek { background: #e0f2fe; color: #0369a1; }
 .monitor-kind.framework { background: #fef3c7; color: #b45309; }
 .monitor-kind.napcat { background: #fee2e2; color: #dc2626; }
 
@@ -204,12 +181,9 @@
   background: #1e2530;
 }
 
-:root[data-theme="dark"] .monitor-process-group {
-  background: #1a1f29;
-}
-
 :root[data-theme="dark"] .monitor-kind.console { background: #1e1f4a; color: #818cf8; }
 :root[data-theme="dark"] .monitor-kind.backend { background: #052e16; color: #4ade80; }
+:root[data-theme="dark"] .monitor-kind.deepseek { background: #082f49; color: #7dd3fc; }
 :root[data-theme="dark"] .monitor-kind.framework { background: #3b2f00; color: #fbbf24; }
 :root[data-theme="dark"] .monitor-kind.napcat { background: #3b0a0a; color: #f87171; }
 
@@ -221,8 +195,6 @@
 .monitor-meter-head { font-size: 13px; }
 .monitor-meter-head strong { font-size: 14px; }
 .monitor-uptime strong { font-size: 24px; }
-.monitor-process-group { font-size: 13px; }
-.monitor-process-group strong { font-size: 19px; }
 .monitor-kind { font-size: 12px; }
 .monitor-empty { font-size: 13px; }
 .monitor-table { font-size: 13px; }

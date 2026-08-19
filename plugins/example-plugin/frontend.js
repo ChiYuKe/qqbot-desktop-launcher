@@ -15,7 +15,7 @@
   // 动态加载插件自己的样式表（不要求会话令牌）。
   var styleLink = document.createElement('link')
   styleLink.rel = 'stylesheet'
-  styleLink.href = API_BASE + '/plugin-assets/example-plugin/style.css'
+  styleLink.href = API_BASE + '/plugin-assets/example-plugin/style.css?v=' + Date.now()
   document.head.appendChild(styleLink)
 
   function formatUptime(totalSeconds) {
@@ -89,21 +89,14 @@
         error ? '读取监控数据失败：' + error : '正在采集本机监控数据…')
     }
 
-    var groups = processData.groups || {}
     var processes = processData.processes || []
-    var groupOrder = [
-      ['console', '桌面控制台'],
-      ['backend', '管理后端'],
-      ['framework', 'Bot 框架'],
-      ['napcat', 'NapCat 协议端'],
-    ]
 
     return React.createElement('div', { className: 'monitor-page' },
       // 状态条
       React.createElement('div', { className: 'monitor-status' },
         React.createElement('span', { className: 'monitor-live-dot' }),
         React.createElement('span', null, '实时监控（每 2 秒刷新）'),
-        React.createElement('span', null, '仅显示本程序相关进程'),
+        React.createElement('span', null, '仅显示本程序、DSH、Bot 框架与协议端'),
         React.createElement('span', { className: 'monitor-updated' }, '更新于 ' + lastUpdated),
         error && React.createElement('span', { className: 'monitor-error' }, '接口异常：' + error)),
 
@@ -135,23 +128,12 @@
           React.createElement('div', { className: 'monitor-uptime' },
             React.createElement('strong', null, formatUptime(overview.uptime_seconds))))),
 
-      // 相关进程分组统计
-      React.createElement('div', { className: 'monitor-process-groups' },
-        groupOrder.map(function (pair) {
-          var key = pair[0]
-          var label = pair[1]
-          var group = groups[key] || { count: 0 }
-          return React.createElement('div', { className: 'monitor-process-group', key: key },
-            React.createElement('span', null, label),
-            React.createElement('strong', null, group.count))
-        })),
-
       // 相关进程列表
       React.createElement('div', { className: 'config-card monitor-processes' },
         React.createElement('div', { className: 'config-card-title' },
           React.createElement('div', null,
             React.createElement('strong', null, '相关进程'),
-            React.createElement('span', null, '仅本程序、Bot 框架与协议端'))),
+            React.createElement('span', null, '仅本程序、DSH、Bot 框架与协议端'))),
         processes.length
           ? React.createElement('table', { className: 'monitor-table' },
               React.createElement('thead', null,

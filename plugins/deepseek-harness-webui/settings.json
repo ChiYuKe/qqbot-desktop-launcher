@@ -1,0 +1,29 @@
+{
+  "fields": [
+    {
+      "id": "dsh_root",
+      "type": "directory",
+      "label": "DeepSeek Harness checkout 目录",
+      "default": "C:\\Users\\Administrator\\Desktop\\Project\\deepseek-harness-desktop\\deepseek-harness",
+      "description": "选择包含 package.json 的 deepseek-harness 根目录",
+      "required": true
+    },
+    {
+      "id": "dsh_web_port",
+      "type": "number",
+      "label": "WebUI 端口",
+      "default": 3080,
+      "min": 1024,
+      "max": 65535,
+      "step": 1,
+      "description": "默认 3080，端口需要在本机 1024-65535 范围内"
+    },
+    {
+      "id": "dsh_show_window",
+      "type": "boolean",
+      "label": "启动时显示命令窗口",
+      "default": true,
+      "description": "关闭时 DSH 进程在后台无窗口启动；开启后显示控制台命令窗口，便于查看 dsh web 输出"
+    }
+  ]
+}
