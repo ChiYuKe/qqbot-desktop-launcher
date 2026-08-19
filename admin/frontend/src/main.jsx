@@ -1,18 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  Activity, Bell, Bot, ChevronDown, ChevronLeft, CircleHelp, LayoutDashboard, Puzzle, Server, Settings, SquareTerminal, UserRound,
+  Activity, Bell, Bot, ChevronDown, ChevronLeft, CircleHelp, LayoutDashboard, Loader2, Puzzle, Server, Settings, SquareTerminal, UserRound,
 } from 'lucide-react'
 import './styles.css'
 import './layout.css'
 import './theme-packages/blue.css'
 import { api, dashboardApi, DASHBOARD_POLL_INTERVAL_MS } from './lib/api.js'
-import { EMPTY_PLUGIN_FRAMEWORKS, astrbotDashboardPort, normalizePluginFrameworks, webUiTarget } from './lib/bot.js'
+import { EMPTY_PLUGIN_FRAMEWORKS, astrbotDashboardPort, normalizePluginFrameworks, openExternal, webUiTarget } from './lib/bot.js'
 import { isCurrentSessionLog, mergeCurrentSessionLogs, orderCurrentSessionLogs, resolveQuickLoginCommand } from './lib/logs.js'
 import { deriveStatsFromLogs } from './lib/stats.js'
 import { DEFAULT_THEME_PACKAGE, getThemePackage, THEME_PACKAGES } from './theme-packages/index.js'
 import {
-  FAVORITES_STORAGE_KEY, FONT_OPTIONS, FONT_STORAGE_KEY, NOTIFICATION_FEED_URL,
+  PLUGIN_FRAMEWORK_FAVORITE_KEYS, FAVORITES_STORAGE_KEY, FONT_OPTIONS, FONT_STORAGE_KEY, NOTIFICATION_FEED_URL,
   NOTIFICATION_MAX_ITEMS, NOTIFICATION_POLL_INTERVAL_MS,
   NOTIFICATION_STORAGE_KEY, OFFICIAL_RESOURCE_URLS, PREFERENCES_STORAGE_KEY, RESOURCE_SETUP_POLL_INTERVAL_MS,
   SECONDARY_PAGE_NAMES, THEME_PACKAGE_STORAGE_KEY, fallbackBots, fallbackLogs, fallbackStats,
@@ -21,13 +21,15 @@ import {
 } from './constants.js'
 import { CreateAccountModal, DeleteAccountModal, NavItem, NotificationCenterModal, WebUiMenuItem, WindowControls } from './components.jsx'
 import { AccountWorkspace } from './pages/account.jsx'
-import { EmbeddedWebUiPage } from './pages/embedded.jsx'
+import { EmbeddedWebUiBubble, EmbeddedWebUiPage } from './pages/embedded.jsx'
 import { OverviewPage } from './pages/overview.jsx'
 import { PluginPage } from './pages/plugins.jsx'
 import { ResourcePage, ResourceSetupModal } from './pages/resources.jsx'
 import { PlaceholderPage, RuntimeStatusPage } from './pages/runtime.jsx'
 import { SettingsPage } from './settings/index.jsx'
-import { collectPluginNavItems, fetchPlugins, getPluginPageComponent, initPluginHost, setPluginEnabled, subscribePlugins, unloadPlugin } from './lib/console-plugins.js'
+import { collectPluginNavItems, fetchPlugins, getPluginPageComponent, getPluginWebUiItems, initPluginHost, setPluginEnabled, subscribePlugins, unloadPlugin } from './lib/console-plugins.js'
+
+const getPluginFrameworkByFavoriteKey = (key) => Object.entries(PLUGIN_FRAMEWORK_FAVORITE_KEYS).find(([, favoriteKey]) => favoriteKey === key)?.[0] || ''
 
 // 暴露 React 全局给控制台插件：插件脚本通过 window.React.createElement 等 API 构建界面。
 window.React = React
@@ -56,6 +58,8 @@ function App() {
   const [online, setOnline] = useState(false)
   const [webUiMenuOpen, setWebUiMenuOpen] = useState(false)
   const [embeddedWebUi, setEmbeddedWebUi] = useState(null)
+  const [embeddedWebUiMinimized, setEmbeddedWebUiMinimized] = useState(false)
+  const [webUiLaunching, setWebUiLaunching] = useState('')
   const [notificationState, setNotificationState] = useState(readNotificationState)
   const [notificationOpen, setNotificationOpen] = useState(false)
   const returnPageRef = useRef('QQ 账号')
@@ -84,6 +88,7 @@ function App() {
   })
   const [consolePlugins, setConsolePlugins] = useState([])
   const [pluginNavItems, setPluginNavItems] = useState([])
+  const [pluginFramework, setPluginFramework] = useState('nonebot')
   // 插件脚本异步注册完成后通过 setPluginVersion 触发重渲染；值本身不被读取。
   const [, setPluginVersion] = useState(0)
 
@@ -403,7 +408,23 @@ function App() {
         notify(`AstrBot 登录信息读取失败：${error.message}`)
       }
     }
+    setEmbeddedWebUiMinimized(false)
     setEmbeddedWebUi({ ...resolvedTarget, kind, botId: botOverride?.id || '' })
+  }
+
+  const launchPluginWebUi = async (item) => {
+    setWebUiMenuOpen(false)
+    setWebUiLaunching(item.label)
+    try {
+      const target = await item.onClick()
+      if (!target?.url) throw new Error('插件没有返回可打开的 WebUI 地址')
+      setEmbeddedWebUiMinimized(false)
+      setEmbeddedWebUi({ ...target, title: target.title || item.label, kind: target.kind || 'plugin', pluginId: item.pluginId })
+    } catch (error) {
+      notify(`打开${item.label}失败：${error.message}`)
+    } finally {
+      setWebUiLaunching('')
+    }
   }
 
   const action = async (bot, actionName, label) => {
@@ -464,10 +485,32 @@ function App() {
     }
   }
 
+  const refreshConsolePluginList = async () => {
+    try {
+      const data = await api('/api/console-plugins')
+      const manifests = Array.isArray(data?.plugins) ? data.plugins : []
+      const enabledIds = new Set(manifests.filter((item) => item.enabled !== false).map((item) => item.id))
+      consolePlugins.forEach((plugin) => {
+        if (!enabledIds.has(plugin.id)) unloadPlugin(plugin.id)
+      })
+      setConsolePlugins(manifests)
+      setPluginNavItems(collectPluginNavItems(manifests))
+      initPluginHost(manifests)
+      return true
+    } catch (error) {
+      notify(`控制台插件刷新失败：${error.message}`)
+      return false
+    }
+  }
+
   const refresh = async () => {
     setRefreshing(true)
-    await loadDashboard(true)
-    setRefreshing(false)
+    try {
+      const [, pluginsRefreshed] = await Promise.all([loadDashboard(), refreshConsolePluginList()])
+      if (pluginsRefreshed) notify('状态和插件列表已刷新')
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   const sendCommand = async (bot, command, currentLogs) => {
@@ -561,6 +604,11 @@ function App() {
         unloadPlugin(plugin.id)
         if (pluginNavItems.some((item) => item.pluginId === plugin.id && item.key === active)) {
           navigate('插件管理')
+        }
+        // 如果该插件的 WebUI 正在嵌入显示（包括悬浮球），一并关闭。
+        if (embeddedWebUi?.pluginId === plugin.id) {
+          setEmbeddedWebUi(null)
+          setEmbeddedWebUiMinimized(false)
         }
       }
       notify(`${enabled ? '已启用' : '已停用'}控制台插件「${plugin.name}」`)
@@ -682,6 +730,16 @@ function App() {
     })
   }, [])
 
+  const navigateFavorite = useCallback((key) => {
+    const favoriteFramework = getPluginFrameworkByFavoriteKey(key)
+    if (favoriteFramework) {
+      setPluginFramework(favoriteFramework)
+      navigate('插件管理')
+      return
+    }
+    navigate(key)
+  }, [navigate])
+
   const returnToPreviousPage = useCallback(() => {
     setActive(returnPageRef.current || 'QQ 账号')
   }, [])
@@ -694,17 +752,19 @@ function App() {
   const isAccountPage = active === 'QQ 账号'
   const activePluginNav = pluginNavItems.find((item) => item.key === active)
   const isPluginPage = Boolean(activePluginNav)
+  const pluginWebUiItems = getPluginWebUiItems({ api, notify, openExternal })
   // 插件注册后 pluginVersion 变化会触发重渲染，直接读取全局注册表即可拿到最新组件。
   const pluginPageComponent = getPluginPageComponent(active)
 
   return <div className="app-shell">
-    <header className="app-topbar">
-      <div className="topbar-brand-wrap" ref={webUiMenuRef}><button type="button" className={`topbar-brand ${webUiMenuOpen ? 'open' : ''}`} onClick={() => setWebUiMenuOpen(value => !value)} aria-haspopup="menu" aria-expanded={webUiMenuOpen}><span>QQ 控制台</span><ChevronDown size={14} /></button>{webUiMenuOpen && <div className="webui-switcher" role="menu"><div className="webui-switcher-heading">切换 WebUI{selectedBot && <small>{selectedBot.name}</small>}</div>{selectedBot ? <><WebUiMenuItem icon={Server} label="NapCat WebUI" port={selectedBot.napcat_port || 6099} onClick={() => openWebUi('napcat')} /><WebUiMenuItem icon={Bot} label="AstrBot WebUI" port={astrbotDashboardPort(selectedBot.napcat_port || 6099)} disabled={selectedBot.framework !== 'astrbot'} disabledText="当前账号未使用 AstrBot" onClick={() => openWebUi('astrbot')} /></> : <div className="webui-switcher-empty">请先创建或选择一个 QQ 账号</div>}</div>}</div>
-      <div className="topbar-actions"><button className={`topbar-action ${unreadNotificationCount ? 'has-unread' : ''}`} onClick={openNotificationCenter} aria-label={unreadNotificationCount ? `通知，有${unreadNotificationCount}条未读` : '通知'} title={unreadNotificationCount ? `${unreadNotificationCount} 条未读通知` : '通知'}><Bell size={16} />{unreadNotificationCount > 0 && <i className="notification-dot" aria-hidden="true" />}</button><span className={`service-pill ${online ? 'online' : ''}`}><i />{online ? '本机服务正常' : '等待连接'}</span><WindowControls /></div>
+    {webUiLaunching && <div className="webui-launch-backdrop" role="status" aria-live="polite"><div className="webui-launch-dialog"><div className="webui-launch-icon"><Loader2 size={22} className="spin" /></div><div><strong>正在启动 {webUiLaunching}</strong><span>正在准备本机 WebUI，首次启动可能需要一点时间</span></div></div></div>}
+     <header className="app-topbar">
+      <div className="topbar-brand-wrap" ref={webUiMenuRef}><button type="button" className={`topbar-brand ${webUiMenuOpen ? 'open' : ''}`} onClick={() => setWebUiMenuOpen(value => !value)} aria-haspopup="menu" aria-expanded={webUiMenuOpen}><span>QQ 控制台</span><ChevronDown size={14} /></button>{webUiMenuOpen && <div className="webui-switcher" role="menu"><div className="webui-switcher-heading">切换 WebUI{selectedBot && <small>{selectedBot.name}</small>}</div>{selectedBot ? <><WebUiMenuItem icon={Server} label="NapCat WebUI" port={selectedBot.napcat_port || 6099} onClick={() => openWebUi('napcat')} /><WebUiMenuItem icon={Bot} label="AstrBot WebUI" port={astrbotDashboardPort(selectedBot.napcat_port || 6099)} disabled={selectedBot.framework !== 'astrbot'} disabledText="当前账号未使用 AstrBot" onClick={() => openWebUi('astrbot')} /></> : <div className="webui-switcher-empty">请先创建或选择一个 QQ 账号</div>}{pluginWebUiItems.map((item) => <WebUiMenuItem key={item.id} icon={item.icon} label={item.label} port={item.port} disabled={item.disabled || Boolean(webUiLaunching)} disabledText={webUiLaunching ? '正在启动 WebUI…' : item.disabledText} onClick={() => launchPluginWebUi(item)} />)}</div>}</div>
+      <div className="topbar-actions"><button className={`topbar-action ${unreadNotificationCount ? 'has-unread' : ''}`} onClick={openNotificationCenter} aria-label={unreadNotificationCount ? `通知，有${unreadNotificationCount}条未读` : '通知'} data-tooltip={unreadNotificationCount ? `${unreadNotificationCount} 条未读通知` : '通知'}><Bell size={16} />{unreadNotificationCount > 0 && <i className="notification-dot" aria-hidden="true" />}</button><span className={`service-pill ${online ? 'online' : ''}`}><i />{online ? '本机服务正常' : '等待连接'}</span><WindowControls /></div>
     </header>
 
-    <div className={`app-body ${active === '系统设置' ? 'settings-mode' : ''} ${embeddedWebUi ? 'webui-embedded-mode' : ''}`}>
-      {embeddedWebUi ? <EmbeddedWebUiPage target={embeddedWebUi} onClose={() => setEmbeddedWebUi(null)} /> : <>
+    <div className={`app-body ${active === '系统设置' ? 'settings-mode' : ''} ${embeddedWebUi && !embeddedWebUiMinimized ? 'webui-embedded-mode' : ''}`}>
+      {embeddedWebUi && !embeddedWebUiMinimized ? <EmbeddedWebUiPage target={embeddedWebUi} onClose={() => { setEmbeddedWebUi(null); setEmbeddedWebUiMinimized(false) }} onMinimize={() => setEmbeddedWebUiMinimized(true)} /> : <>
       <aside className="sidebar">
         <nav className="sidebar-nav">
           <NavItem icon={LayoutDashboard} label="概览" active={active} onClick={navigate} favoriteKey="page:概览" favorite={isFavorite('page:概览')} onToggleFavorite={toggleFavorite} />
@@ -714,7 +774,7 @@ function App() {
           <div className="nav-section-label">收藏</div>
           {favoriteBots.length || favoritePages.length ? <>
             {favoriteBots.map((bot) => <NavItem key={bot.id} icon={Bot} label={bot.name} active={active === 'QQ 账号' && selectedBot?.id === bot.id} onClick={() => { navigate('QQ 账号'); setSelectedBotId(bot.id) }} favoriteKey={`bot:${bot.id}`} favorite onToggleFavorite={toggleFavorite} />)}
-            {favoritePages.map(({ key, label, icon: Icon }) => <NavItem key={key} icon={Icon} label={label} active={active} onClick={navigate} favoriteKey={key} favorite onToggleFavorite={toggleFavorite} />)}
+            {favoritePages.map(({ key, label, icon: Icon }) => <NavItem key={key} icon={Icon} label={label} active={getPluginFrameworkByFavoriteKey(key) ? active === '插件管理' && pluginFramework === getPluginFrameworkByFavoriteKey(key) : active} onClick={() => navigateFavorite(key)} favoriteKey={key} favorite onToggleFavorite={toggleFavorite} />)}
           </> : <div className="nav-empty">点击菜单右侧的星标添加快捷入口</div>}
           <div className="nav-section-label">服务</div>
           <NavItem icon={Server} label="NapCat" active={active} onClick={navigate} favoriteKey="page:NapCat" favorite={isFavorite('page:NapCat')} onToggleFavorite={toggleFavorite} />
@@ -728,12 +788,13 @@ function App() {
       </aside>
 
       <main className={`main-content ${active === '运行状态' ? 'runtime-mode' : ''}`}>
-        {active === '系统设置' ? <SettingsPage theme={theme} themePackage={themePackage} font={font} preferences={preferences} online={online} onThemeChange={setTheme} onThemePackageChange={setThemePackage} onFontChange={setFont} onPreferenceChange={updatePreference} onBack={returnToPreviousPage} onNavigate={navigate} onRefresh={refresh} onNotice={notify} /> : active === '概览' ? <OverviewPage bots={bots} stats={stats} napcat={napcat} online={online} logs={logs} refreshing={refreshing} refresh={refresh} onNavigate={navigate} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} /> : active === '运行状态' ? <RuntimeStatusPage bots={bots} system={system} stats={stats} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} /> : active === '插件管理' ? <PluginPage frameworks={pluginFrameworks} consolePlugins={consolePlugins} refreshing={refreshing} onRefresh={refresh} busy={busy} onToggle={togglePlugin} onToggleConsolePlugin={toggleConsolePlugin} onInstallConsolePlugin={installConsolePluginFromGit} onOpenPluginPage={openPluginPage} /> : ['NapCat', 'NoneBot', 'AstrBot'].includes(active) ? <ResourcePage key={active} kind={active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot'} resource={resources?.[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} officialUrl={OFFICIAL_RESOURCE_URLS[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} setup={resourceSetup} onOpenSetup={() => setResourceSetupOpen(true)} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onBack={returnToPreviousPage} /> : isAccountPage ? <AccountWorkspace bots={bots} selectedBot={selectedBot} selectedBotId={selectedBotId} setSelectedBotId={setSelectedBotId} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} onCreate={() => setCreateOpen(true)} onDelete={() => setDeleteTarget(selectedBot)} logs={logs} logsPaused={logsPaused} onTogglePause={() => { setLogsPaused(value => !value); notify(logsPaused ? '日志同步已恢复' : '日志同步已暂停') }} onClear={clearLogs} onCommand={sendCommand} onSavePassword={savePassword} onSavePort={savePort} onSaveNapcatPort={saveNapcatPort} onSaveFramework={saveFramework} onOpenWebUi={openWebUi} onNotice={notify} /> : isPluginPage ? <PluginPageShell component={pluginPageComponent} label={activePluginNav?.label} theme={theme} themePackage={themePackage} font={font} online={online} bots={bots} stats={stats} napcat={napcat} resources={resources} active={active} navigate={navigate} notify={notify} api={api} refresh={refresh} /> : <PlaceholderPage active={active} onBack={() => navigate('QQ 账号')} />}
+        {active === '系统设置' ? <SettingsPage theme={theme} themePackage={themePackage} font={font} preferences={preferences} online={online} onThemeChange={setTheme} onThemePackageChange={setThemePackage} onFontChange={setFont} onPreferenceChange={updatePreference} onBack={returnToPreviousPage} onNavigate={navigate} onRefresh={refresh} onNotice={notify} /> : active === '概览' ? <OverviewPage bots={bots} stats={stats} napcat={napcat} online={online} logs={logs} refreshing={refreshing} refresh={refresh} onNavigate={navigate} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} /> : active === '运行状态' ? <RuntimeStatusPage bots={bots} system={system} stats={stats} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} /> : active === '插件管理' ? <PluginPage framework={pluginFramework} onFrameworkChange={setPluginFramework} frameworks={pluginFrameworks} consolePlugins={consolePlugins} refreshing={refreshing} onRefresh={refresh} busy={busy} onToggle={togglePlugin} onToggleConsolePlugin={toggleConsolePlugin} onInstallConsolePlugin={installConsolePluginFromGit} onOpenPluginPage={openPluginPage} favorites={{ nonebot: isFavorite(PLUGIN_FRAMEWORK_FAVORITE_KEYS.nonebot), astrbot: isFavorite(PLUGIN_FRAMEWORK_FAVORITE_KEYS.astrbot), console: isFavorite(PLUGIN_FRAMEWORK_FAVORITE_KEYS.console) }} onToggleFavorite={toggleFavorite} /> : ['NapCat', 'NoneBot', 'AstrBot'].includes(active) ? <ResourcePage key={active} kind={active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot'} resource={resources?.[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} officialUrl={OFFICIAL_RESOURCE_URLS[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} setup={resourceSetup} onOpenSetup={() => setResourceSetupOpen(true)} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onBack={returnToPreviousPage} /> : isAccountPage ? <AccountWorkspace bots={bots} selectedBot={selectedBot} selectedBotId={selectedBotId} setSelectedBotId={setSelectedBotId} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} onCreate={() => setCreateOpen(true)} onDelete={() => setDeleteTarget(selectedBot)} logs={logs} logsPaused={logsPaused} onTogglePause={() => { setLogsPaused(value => !value); notify(logsPaused ? '日志同步已恢复' : '日志同步已暂停') }} onClear={clearLogs} onCommand={sendCommand} onSavePassword={savePassword} onSavePort={savePort} onSaveNapcatPort={saveNapcatPort} onSaveFramework={saveFramework} onOpenWebUi={openWebUi} onNotice={notify} /> : isPluginPage ? <PluginPageShell component={pluginPageComponent} label={activePluginNav?.label} theme={theme} themePackage={themePackage} font={font} online={online} bots={bots} stats={stats} napcat={napcat} resources={resources} active={active} navigate={navigate} notify={notify} api={api} refresh={refresh} /> : <PlaceholderPage active={active} onBack={() => navigate('QQ 账号')} />}
       </main>
       </>}
     </div>
 
-    {notificationOpen && <NotificationCenterModal items={notificationState.items.filter(isNotificationActive)} onClose={() => setNotificationOpen(false)} />}
+    {embeddedWebUi && embeddedWebUiMinimized && <EmbeddedWebUiBubble target={embeddedWebUi} onOpen={() => setEmbeddedWebUiMinimized(false)} />}
+     {notificationOpen && <NotificationCenterModal items={notificationState.items.filter(isNotificationActive)} onClose={() => setNotificationOpen(false)} />}
     {createOpen && <CreateAccountModal account={newAccount} creating={creating} onChange={setNewAccount} onClose={closeCreateModal} onSubmit={createAccount} />}
     {deleteTarget && <DeleteAccountModal bot={deleteTarget} deleting={deleting} onClose={() => !deleting && setDeleteTarget(null)} onConfirm={deleteAccount} />}
     {resources && resourceSetupOpen && <ResourceSetupModal key={resourceSetup?.id || 'new'} resources={resources} setup={resourceSetup} onSetup={startResourceSetup} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onClose={() => setResourceSetupOpen(false)} />}
@@ -750,7 +811,7 @@ function PluginPageShell({ component: Component, label, navigate: nav, ...props 
         <div className="eyebrow">控制台插件</div>
         <h1>{label || '插件页面'}</h1>
       </div>
-      <button type="button" className="plain-icon" onClick={() => nav?.('插件管理')} title="返回插件管理" aria-label="返回插件管理">
+      <button type="button" className="plain-icon plugin-page-back" data-tooltip="返回插件管理" onClick={() => nav?.('插件管理')} aria-label="返回插件管理">
         <ChevronLeft size={17} />
       </button>
     </header>

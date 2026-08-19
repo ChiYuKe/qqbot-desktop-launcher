@@ -1,16 +1,19 @@
 import { useEffect, useState } from 'react'
-import { Boxes, ChevronDown, ExternalLink, FileText, Folder, GitBranch, Power, Puzzle, RefreshCw, X } from 'lucide-react'
+import { Boxes, ChevronDown, ExternalLink, FileText, Folder, GitBranch, Power, Puzzle, RefreshCw, Settings, Star, X } from 'lucide-react'
 import { StatusPill } from '../components.jsx'
 import { api } from '../lib/api.js'
+import { PLUGIN_FRAMEWORK_FAVORITE_KEYS } from '../constants.js'
 import { EMPTY_PLUGIN_FRAMEWORKS, openExternal } from '../lib/bot.js'
 import { MarkdownDocument } from '../lib/markdown.jsx'
+import { getPluginSettingsComponent, getPluginSettingsSchema } from '../lib/console-plugins.js'
+import { AutoSettingsForm } from '../settings/auto-plugin-settings.jsx'
 
 // 插件管理页：NoneBot 插件、AstrBot 插件、控制台插件三个 tab 切换。
-export function PluginPage({ frameworks = EMPTY_PLUGIN_FRAMEWORKS, consolePlugins = [], refreshing, onRefresh, busy, onToggle, onToggleConsolePlugin, onInstallConsolePlugin, onOpenPluginPage }) {
-  const [framework, setFramework] = useState('nonebot')
+export function PluginPage({ framework = 'nonebot', onFrameworkChange, frameworks = EMPTY_PLUGIN_FRAMEWORKS, consolePlugins = [], refreshing, onRefresh, busy, onToggle, onToggleConsolePlugin, onInstallConsolePlugin, onOpenPluginPage, favorites = {}, onToggleFavorite }) {
   const [expanded, setExpanded] = useState({ framework: 'nonebot', id: '' })
   const [gitInstallOpen, setGitInstallOpen] = useState(false)
   const [detailPlugin, setDetailPlugin] = useState(null)
+  const [settingsPlugin, setSettingsPlugin] = useState(null)
   const [documentation, setDocumentation] = useState({ loading: false, error: '', filename: 'README.md', exists: false, markdown: '' })
 
   useEffect(() => {
@@ -84,13 +87,20 @@ export function PluginPage({ frameworks = EMPTY_PLUGIN_FRAMEWORKS, consolePlugin
           {isConsole ? '控制台插件' : isAstrBot ? 'AstrBot 插件' : 'NoneBot 插件'}
         </div>
         <h1>插件管理</h1>
-        <p title={projectPath}>{projectPath}</p>
+        <p data-tooltip={projectPath}>{projectPath}</p>
       </div>
-      <button className="plain-icon plugin-refresh" onClick={onRefresh} disabled={refreshing} aria-label="刷新插件列表" title="刷新插件列表"><RefreshCw size={17} /></button>
+      <button className="plain-icon plugin-refresh" onClick={onRefresh} disabled={refreshing} aria-label="刷新插件列表" data-tooltip="刷新插件列表"><RefreshCw size={17} /></button>
     </header>
 
     <div className="plugin-framework-tabs" role="tablist" aria-label="插件框架">
-      {tabs.map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={framework === key} className={`plugin-framework-tab ${framework === key ? 'active' : ''}`} onClick={() => { setFramework(key); setDetailPlugin(null) }}>{label}<span>{key === 'console' ? consolePlugins.length : frameworks[key]?.plugins?.length || 0}</span></button>)}
+      {tabs.map(([key, label]) => {
+        const favoriteKey = PLUGIN_FRAMEWORK_FAVORITE_KEYS[key]
+        const favorite = Boolean(favorites[key])
+        return <div key={key} className={`plugin-framework-tab-group ${framework === key ? 'active' : ''}`}>
+          <button type="button" role="tab" aria-selected={framework === key} className={`plugin-framework-tab ${framework === key ? 'active' : ''}`} onClick={() => { onFrameworkChange?.(key); setDetailPlugin(null) }}>{label}<span>{key === 'console' ? consolePlugins.length : frameworks[key]?.plugins?.length || 0}</span></button>
+          <button type="button" className={`plugin-framework-favorite ${favorite ? 'active' : ''}`} onClick={() => onToggleFavorite?.(favoriteKey)} aria-pressed={favorite} aria-label={favorite ? `取消收藏${label}` : `收藏${label}`} data-tooltip={favorite ? `取消收藏${label}` : `收藏${label}`}><Star size={15} fill={favorite ? 'currentColor' : 'none'} /></button>
+        </div>
+      })}
     </div>
 
     {isConsole ? <>
@@ -136,7 +146,7 @@ export function PluginPage({ frameworks = EMPTY_PLUGIN_FRAMEWORKS, consolePlugin
                 {!plugin.frontend && !plugin.backend ? <span className="plugin-managed">仅声明</span> : null}
                 {plugin.frontend && !hasPage ? <span className="plugin-managed">前端页面</span> : null}
               </div>
-              <button type="button" role="switch" aria-checked={pluginEnabled} className={`plugin-toggle ${pluginEnabled ? 'enabled' : ''}`} onClick={() => onToggleConsolePlugin?.(plugin, !pluginEnabled)} disabled={isBusy} title={pluginEnabled ? '停用插件' : '启用插件'}><Power size={14} />{isBusy ? '保存中' : pluginEnabled ? '停用' : '启用'}</button>
+              <button type="button" role="switch" aria-checked={pluginEnabled} className={`plugin-toggle ${pluginEnabled ? 'enabled' : ''}`} onClick={() => onToggleConsolePlugin?.(plugin, !pluginEnabled)} disabled={isBusy} aria-label={pluginEnabled ? '停用插件' : '启用插件'}><Power size={14} />{isBusy ? '保存中' : pluginEnabled ? '停用' : '启用'}</button>
             </div>
           </article>
         }) : <div className="plugin-empty"><Boxes size={22} /><strong>没有安装控制台插件</strong><span>将插件目录放入项目根目录的 plugins/ 文件夹后刷新本页即可。</span></div>}
@@ -171,8 +181,8 @@ export function PluginPage({ frameworks = EMPTY_PLUGIN_FRAMEWORKS, consolePlugin
                 <p>{plugin.description}</p>
               </div>
               <div className="plugin-row-actions">
-                {plugin.toggle_supported ? <button type="button" role="switch" aria-checked={plugin.enabled} className={`plugin-toggle ${plugin.enabled ? 'enabled' : ''}`} onClick={() => onToggle(plugin, !plugin.enabled)} disabled={isBusy} title={plugin.enabled ? '停用插件' : '启用插件'}><Power size={14} />{isBusy ? '保存中' : plugin.enabled ? '停用' : '启用'}</button> : <span className="plugin-managed">{isAstrBot ? 'AstrBot 管理' : '自动加载'}</span>}
-                <button type="button" className="plain-icon plugin-expand" onClick={() => setExpanded({ framework, id: isExpanded ? '' : plugin.plugin_id })} aria-expanded={isExpanded} aria-label={isExpanded ? '收起插件详情' : '展开插件详情'} title={isExpanded ? '收起详情' : '查看详情'}><ChevronDown size={16} /></button>
+                {plugin.toggle_supported ? <button type="button" role="switch" aria-checked={plugin.enabled} className={`plugin-toggle ${plugin.enabled ? 'enabled' : ''}`} onClick={() => onToggle(plugin, !plugin.enabled)} disabled={isBusy} data-tooltip={plugin.enabled ? '停用插件' : '启用插件'}><Power size={14} />{isBusy ? '保存中' : plugin.enabled ? '停用' : '启用'}</button> : <span className="plugin-managed">{isAstrBot ? 'AstrBot 管理' : '自动加载'}</span>}
+                <button type="button" className="plain-icon plugin-expand" onClick={() => setExpanded({ framework, id: isExpanded ? '' : plugin.plugin_id })} aria-expanded={isExpanded} aria-label={isExpanded ? '收起插件详情' : '展开插件详情'} data-tooltip={isExpanded ? '收起详情' : '查看详情'}><ChevronDown size={16} /></button>
               </div>
             </div>
             {isExpanded && <div className="plugin-details">
@@ -190,10 +200,15 @@ export function PluginPage({ frameworks = EMPTY_PLUGIN_FRAMEWORKS, consolePlugin
         }) : <div className="plugin-empty"><Puzzle size={22} /><strong>没有发现 {isAstrBot ? 'AstrBot' : 'NoneBot'} 插件</strong><span>{isAstrBot ? '请先创建 AstrBot 账号实例，或检查对应实例的 data/plugins 目录。' : '检查项目目录或 pyproject.toml 中的插件配置。'}</span></div>}
       </div>
     </>}
-  </section>{detailPlugin ? <ConsolePluginDetailModal plugin={detailPlugin} documentation={documentation} onClose={() => setDetailPlugin(null)} /> : null}{gitInstallOpen ? <GitPluginInstallModal busy={busy === 'console-plugin-install'} onClose={() => setGitInstallOpen(false)} onInstall={onInstallConsolePlugin} /> : null}</>
+  </section>{detailPlugin ? <ConsolePluginDetailModal plugin={detailPlugin} documentation={documentation} canConfigure={pluginCanConfigure(detailPlugin)} onConfigure={() => setSettingsPlugin(detailPlugin)} onClose={() => setDetailPlugin(null)} /> : null}{settingsPlugin ? <ConsolePluginSettingsModal plugin={settingsPlugin} SettingsComponent={getPluginSettingsComponent(settingsPlugin.id)} useAutoForm={!getPluginSettingsComponent(settingsPlugin.id) && Boolean(getPluginSettingsSchema(settingsPlugin))} onClose={() => setSettingsPlugin(null)} /> : null}{gitInstallOpen ? <GitPluginInstallModal busy={busy === 'console-plugin-install'} onClose={() => setGitInstallOpen(false)} onInstall={onInstallConsolePlugin} /> : null}</>
 }
 
-function ConsolePluginDetailModal({ plugin, documentation, onClose }) {
+// 插件是否有「配置」入口：注册了自定义 settings 组件，或声明了 settings.json 配置模式。
+function pluginCanConfigure(plugin) {
+  return Boolean(getPluginSettingsComponent(plugin.id) || getPluginSettingsSchema(plugin))
+}
+
+function ConsolePluginDetailModal({ plugin, documentation, canConfigure, onConfigure, onClose }) {
   return <div className="modal-backdrop plugin-detail-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
     <section className="plugin-detail-modal" role="dialog" aria-modal="true" aria-labelledby="plugin-detail-title">
       <div className="modal-header plugin-detail-header">
@@ -202,7 +217,10 @@ function ConsolePluginDetailModal({ plugin, documentation, onClose }) {
           <h2 id="plugin-detail-title">{plugin.name || plugin.id}</h2>
           <p>{plugin.description || '未提供描述'}</p>
         </div>
-        <button type="button" className="modal-close" onClick={onClose} aria-label="关闭插件详情"><X size={18} /></button>
+        <div className="plugin-detail-header-actions">
+          {canConfigure ? <button type="button" className="secondary" onClick={onConfigure}><Settings size={14} />配置</button> : null}
+          <button type="button" className="modal-close" onClick={onClose} aria-label="关闭插件详情"><X size={18} /></button>
+        </div>
       </div>
 
       <dl className="plugin-detail-meta">
@@ -225,6 +243,29 @@ function ConsolePluginDetailModal({ plugin, documentation, onClose }) {
     </section>
   </div>
 }
+
+function ConsolePluginSettingsModal({ plugin, SettingsComponent, useAutoForm, onClose }) {
+  // 回退逻辑：有自定义 settings 组件优先用自定义；否则声明了 settings.json 则自动渲染。
+  if (typeof SettingsComponent !== 'function' && !useAutoForm) return null
+  return <div className="modal-backdrop plugin-settings-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="plugin-settings-modal" role="dialog" aria-modal="true" aria-labelledby="plugin-settings-title">
+      <div className="modal-header plugin-settings-header">
+        <div>
+          <div className="eyebrow">控制台插件配置</div>
+          <h2 id="plugin-settings-title">{plugin.name || plugin.id}</h2>
+          <p>配置会保存在本机，仅供这个控制台使用。</p>
+        </div>
+        <button type="button" className="modal-close" onClick={onClose} aria-label="关闭插件配置"><X size={18} /></button>
+      </div>
+      <div className="plugin-settings-body">
+        {useAutoForm
+          ? <AutoSettingsForm api={api} plugin={plugin} onClose={onClose} />
+          : <SettingsComponent api={api} plugin={plugin} onClose={onClose} />}
+      </div>
+    </section>
+  </div>
+}
+
 
 function GitPluginInstallModal({ busy, onClose, onInstall }) {
   const [url, setUrl] = useState('')

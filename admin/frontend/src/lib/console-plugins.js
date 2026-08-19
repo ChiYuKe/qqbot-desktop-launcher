@@ -9,6 +9,9 @@
  * - ``window.React``     React 全局（在 main.jsx 入口处挂载）
  * - ``window.__DSH_PLUGINS__`` 插件注册 API
  *
+ * 插件还可以通过 ``webuiItems`` 注册顶部 WebUI 切换菜单项；菜单项的
+ * ``onClick`` 会收到宿主提供的 API 上下文，并可返回一个要嵌入的 WebUI 目标。
+ *
  * 加载流程：
  * 1. 控制台启动时调用 ``fetchPlugins()`` 从后端获取清单
  * 2. 对有 ``frontend`` 入口的插件，注入 ``<script src>`` 标签加载
@@ -87,18 +90,23 @@ const pluginApi = {
    * @param {string} plugin.id - 插件 id，必须与 manifest 一致
    * @param {object} plugin.pages - 导航 key 到 React 组件函数的映射
    *   pages['page:example-plugin'] = function(props) { return React.createElement(...) }
-   * @param {object} [plugin.settings] - 可选，设置页面组件映射
+   * @param {object|function} [plugin.settings] - 可选，插件配置组件，或配置组件映射
+   * @param {Array<object>} [plugin.webuiItems] - 可选，顶部 WebUI 切换菜单项
    */
-  register({ id, pages = {}, settings = {} }) {
+  register({ id, pages = {}, settings = {}, webuiItems = [] }) {
     if (!id) {
       console.error('[控制台插件] 注册失败：缺少 id')
       return
     }
     const existing = _registeredPlugins.get(id) || {}
+    const normalizedSettings = typeof settings === 'function'
+      ? settings
+      : { ...(existing.settings && typeof existing.settings === 'object' ? existing.settings : {}), ...(settings && typeof settings === 'object' ? settings : {}) }
     _registeredPlugins.set(id, {
       ...existing,
       pages: { ...existing.pages, ...pages },
-      settings: { ...existing.settings, ...settings },
+      settings: normalizedSettings,
+      webuiItems: [...(existing.webuiItems || []), ...(Array.isArray(webuiItems) ? webuiItems : [])],
     })
     _emitChange()
   },
@@ -154,7 +162,7 @@ export function loadPluginScript(pluginId, frontendFile) {
   const scriptKey = `${pluginId}:${frontendFile}`
   if (_loadedScripts.has(scriptKey)) return
   const script = document.createElement('script')
-  script.src = `http://127.0.0.1:6700/plugin-assets/${pluginId}/${frontendFile}`
+  script.src = `http://127.0.0.1:6700/plugin-assets/${pluginId}/${frontendFile}?v=${Date.now()}`
   script.onload = () => {
     _loadedScripts.add(scriptKey)
   }
@@ -194,6 +202,52 @@ export function collectPluginNavItems(manifests) {
       icon: resolvePluginIcon(nav.icon),
       pluginId: manifest.id,
     })
+  }
+  return items
+}
+
+export function getPluginSettingsComponent(pluginId) {
+  const settings = _registeredPlugins.get(pluginId)?.settings
+  if (typeof settings === 'function') return settings
+  if (!settings || typeof settings !== 'object') return null
+  if (typeof settings.component === 'function') return settings.component
+  return Object.values(settings).find((component) => typeof component === 'function') || null
+}
+
+/**
+ * 获取插件的声明式配置模式（来自插件目录里的 settings.json）。
+ * 返回字段数组；没有声明时返回 null。宿主据此用通用表单渲染器自动生成配置页。
+ * @param {object} manifest - 从后端获取的插件清单条目
+ * @returns {Array<object>|null} 配置字段数组，或 null
+ */
+export function getPluginSettingsSchema(manifest) {
+  if (!manifest || typeof manifest !== 'object') return null
+  const schema = manifest.settingsSchema
+  if (!Array.isArray(schema)) return null
+  return schema
+}
+
+/**
+ * 获取插件注册的顶部 WebUI 切换菜单项。
+ * @param {object} context - 宿主提供给插件点击处理器的上下文
+ * @returns {Array<object>} 菜单项 { id, label, port, icon, onClick }
+ */
+export function getPluginWebUiItems(context = {}) {
+  const items = []
+  for (const [pluginId, plugin] of _registeredPlugins) {
+    for (const item of plugin.webuiItems || []) {
+      if (!item || !item.label || typeof item.onClick !== 'function') continue
+      items.push({
+        id: String(item.id || `${pluginId}:${items.length}`),
+        pluginId: String(pluginId),
+        label: String(item.label),
+        port: item.port,
+        icon: resolvePluginIcon(item.icon),
+        disabled: Boolean(item.disabled),
+        disabledText: String(item.disabledText || ''),
+        onClick: () => item.onClick(context),
+      })
+    }
   }
   return items
 }

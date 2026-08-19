@@ -1,6 +1,6 @@
 // 面板常量与纯函数：存储键、默认偏好、字体选项、通知规范化、时间/字节格式化。
 // 不依赖 React（仅引用 lucide 图标组件用于收藏页/设置导航定义），被 main.jsx 与各功能模块共享。
-import { Activity, Bot, CircleUserRound, Keyboard, LayoutDashboard, Palette, Paintbrush, Puzzle, Server, ShieldCheck, SlidersHorizontal, SquareTerminal, Trash2, UserRound, Users, Volume2 } from 'lucide-react'
+import { Activity, Bot, Boxes, CircleUserRound, Keyboard, LayoutDashboard, Palette, Paintbrush, Puzzle, Server, ShieldCheck, SlidersHorizontal, SquareTerminal, Trash2, UserRound, Users, Volume2 } from 'lucide-react'
 export const fallbackBots = []
 export const fallbackLogs = []
 export const fallbackStats = { periods: {}, bots: {}, series: [], intraday: [], intraday_by_day: {}, updated_at: null }
@@ -20,11 +20,20 @@ export const OFFICIAL_RESOURCE_URLS = {
   astrbot: 'https://docs.astrbot.app/deploy/astrbot/cli.html',
 }
 export const RESOURCE_SETUP_POLL_INTERVAL_MS = 750
+export const PLUGIN_FRAMEWORK_FAVORITE_KEYS = {
+  nonebot: 'tab:NoneBot插件',
+  astrbot: 'tab:AstrBot插件',
+  console: 'tab:控制台插件',
+}
+export const CONSOLE_PLUGIN_FAVORITE_KEY = PLUGIN_FRAMEWORK_FAVORITE_KEYS.console
 export const favoritePageDefinitions = [
   { key: 'page:概览', label: '概览', icon: LayoutDashboard },
   { key: 'page:QQ 账号', label: 'QQ 账号', icon: UserRound },
   { key: 'page:运行状态', label: '运行状态', icon: Activity },
   { key: 'page:插件管理', label: '插件管理', icon: Puzzle },
+  { key: PLUGIN_FRAMEWORK_FAVORITE_KEYS.nonebot, label: 'NoneBot 插件', icon: SquareTerminal },
+  { key: PLUGIN_FRAMEWORK_FAVORITE_KEYS.astrbot, label: 'AstrBot 插件', icon: Bot },
+  { key: PLUGIN_FRAMEWORK_FAVORITE_KEYS.console, label: '控制台插件', icon: Boxes },
   { key: 'page:群组管理', label: '群组管理', icon: Users },
   { key: 'page:NapCat', label: 'NapCat', icon: Server },
   { key: 'page:NoneBot', label: 'NoneBot', icon: SquareTerminal },
