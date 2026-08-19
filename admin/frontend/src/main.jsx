@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  Activity, Bell, Bot, ChevronDown, CircleHelp, LayoutDashboard, Puzzle, Server, Settings, SquareTerminal, UserRound,
+  Activity, Bell, Bot, ChevronDown, ChevronLeft, CircleHelp, LayoutDashboard, Puzzle, Server, Settings, SquareTerminal, UserRound,
 } from 'lucide-react'
 import './styles.css'
 import './layout.css'
@@ -27,6 +27,11 @@ import { PluginPage } from './pages/plugins.jsx'
 import { ResourcePage, ResourceSetupModal } from './pages/resources.jsx'
 import { PlaceholderPage, RuntimeStatusPage } from './pages/runtime.jsx'
 import { SettingsPage } from './settings/index.jsx'
+import { collectPluginNavItems, fetchPlugins, getPluginPageComponent, initPluginHost, setPluginEnabled, subscribePlugins, unloadPlugin } from './lib/console-plugins.js'
+
+// 暴露 React 全局给控制台插件：插件脚本通过 window.React.createElement 等 API 构建界面。
+window.React = React
+
 function App() {
   const [bots, setBots] = useState(fallbackBots)
   const [system, setSystem] = useState({ cpu: 0, memory: 0, running_bots: 0 })
@@ -77,6 +82,10 @@ function App() {
       return []
     }
   })
+  const [consolePlugins, setConsolePlugins] = useState([])
+  const [pluginNavItems, setPluginNavItems] = useState([])
+  // 插件脚本异步注册完成后通过 setPluginVersion 触发重渲染；值本身不被读取。
+  const [, setPluginVersion] = useState(0)
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)')
@@ -111,6 +120,24 @@ function App() {
   useEffect(() => {
     if (favoriteKeys !== null) window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(favoriteKeys))
   }, [favoriteKeys])
+
+  useEffect(() => {
+    let disposed = false
+    const unsubscribe = subscribePlugins(() => {
+      if (!disposed) setPluginVersion((version) => version + 1)
+    })
+    ;(async () => {
+      const manifests = await fetchPlugins(api)
+      if (disposed) return
+      setConsolePlugins(manifests)
+      setPluginNavItems(collectPluginNavItems(manifests))
+      initPluginHost(manifests)
+    })()
+    return () => {
+      disposed = true
+      unsubscribe()
+    }
+  }, [])
 
   useEffect(() => {
     notificationStateRef.current = notificationState
@@ -520,6 +547,53 @@ function App() {
     }
   }
 
+  const toggleConsolePlugin = async (plugin, enabled) => {
+    setBusy(`console-plugin:${plugin.id}`)
+    try {
+      const manifests = await setPluginEnabled(api, plugin.id, enabled)
+      setConsolePlugins(manifests)
+      setPluginNavItems(collectPluginNavItems(manifests))
+      if (enabled) {
+        // 重新启用：加载该插件的前端脚本（unloadPlugin 已清除其缓存）。
+        initPluginHost(manifests.filter((item) => item.id === plugin.id))
+      } else {
+        // 停用：注销组件、移除脚本；若正停留在其页面则退回插件管理。
+        unloadPlugin(plugin.id)
+        if (pluginNavItems.some((item) => item.pluginId === plugin.id && item.key === active)) {
+          navigate('插件管理')
+        }
+      }
+      notify(`${enabled ? '已启用' : '已停用'}控制台插件「${plugin.name}」`)
+    } catch (error) {
+      notify(`插件设置失败：${error.message}`)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const installConsolePluginFromGit = async (payload) => {
+    setBusy('console-plugin-install')
+    try {
+      const result = await api('/api/console-plugins/install-git', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+      const manifests = Array.isArray(result.plugins) ? result.plugins : await fetchPlugins(api)
+      const installedId = result.plugin?.id
+      if (installedId) unloadPlugin(installedId)
+      setConsolePlugins(manifests)
+      setPluginNavItems(collectPluginNavItems(manifests))
+      if (installedId) initPluginHost(manifests.filter((item) => item.id === installedId))
+      notify(result.replaced ? `控制台插件「${result.plugin?.name || installedId}」已更新` : `控制台插件「${result.plugin?.name || installedId}」已安装${result.restart_required ? '，重启管理服务后加载后端' : ''}`)
+      return result
+    } catch (error) {
+      notify(`Git 插件安装失败：${error.message}`)
+      throw error
+    } finally {
+      setBusy('')
+    }
+  }
+
   const unreadNotificationCount = preferences.notificationsEnabled
     ? notificationState.items.filter((item) => !item.read && isNotificationActive(item)).length
     : 0
@@ -549,7 +623,10 @@ function App() {
   }
 
   const favoriteBots = useMemo(() => bots.filter((bot) => (favoriteKeys || []).includes(`bot:${bot.id}`)), [bots, favoriteKeys])
-  const favoritePages = useMemo(() => favoritePageDefinitions.filter((item) => (favoriteKeys || []).includes(item.key)), [favoriteKeys])
+  const favoritePages = useMemo(() => {
+    const allPageDefinitions = [...favoritePageDefinitions, ...pluginNavItems]
+    return allPageDefinitions.filter((item) => (favoriteKeys || []).includes(item.key))
+  }, [favoriteKeys, pluginNavItems])
 
   const trackResourceSetup = useCallback(async (jobId) => {
     try {
@@ -609,7 +686,16 @@ function App() {
     setActive(returnPageRef.current || 'QQ 账号')
   }, [])
 
+  const openPluginPage = useCallback((pluginId) => {
+    const plugin = consolePlugins.find((item) => item.id === pluginId)
+    if (plugin?.nav?.key) navigate(plugin.nav.key)
+  }, [consolePlugins, navigate])
+
   const isAccountPage = active === 'QQ 账号'
+  const activePluginNav = pluginNavItems.find((item) => item.key === active)
+  const isPluginPage = Boolean(activePluginNav)
+  // 插件注册后 pluginVersion 变化会触发重渲染，直接读取全局注册表即可拿到最新组件。
+  const pluginPageComponent = getPluginPageComponent(active)
 
   return <div className="app-shell">
     <header className="app-topbar">
@@ -642,7 +728,7 @@ function App() {
       </aside>
 
       <main className={`main-content ${active === '运行状态' ? 'runtime-mode' : ''}`}>
-        {active === '系统设置' ? <SettingsPage theme={theme} themePackage={themePackage} font={font} preferences={preferences} online={online} onThemeChange={setTheme} onThemePackageChange={setThemePackage} onFontChange={setFont} onPreferenceChange={updatePreference} onBack={returnToPreviousPage} onNavigate={navigate} onRefresh={refresh} onNotice={notify} /> : active === '概览' ? <OverviewPage bots={bots} stats={stats} napcat={napcat} online={online} logs={logs} refreshing={refreshing} refresh={refresh} onNavigate={navigate} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} /> : active === '运行状态' ? <RuntimeStatusPage bots={bots} system={system} stats={stats} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} /> : active === '插件管理' ? <PluginPage frameworks={pluginFrameworks} refreshing={refreshing} onRefresh={refresh} busy={busy} onToggle={togglePlugin} /> : ['NapCat', 'NoneBot', 'AstrBot'].includes(active) ? <ResourcePage key={active} kind={active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot'} resource={resources?.[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} officialUrl={OFFICIAL_RESOURCE_URLS[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} setup={resourceSetup} onOpenSetup={() => setResourceSetupOpen(true)} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onBack={returnToPreviousPage} /> : isAccountPage ? <AccountWorkspace bots={bots} selectedBot={selectedBot} selectedBotId={selectedBotId} setSelectedBotId={setSelectedBotId} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} onCreate={() => setCreateOpen(true)} onDelete={() => setDeleteTarget(selectedBot)} logs={logs} logsPaused={logsPaused} onTogglePause={() => { setLogsPaused(value => !value); notify(logsPaused ? '日志同步已恢复' : '日志同步已暂停') }} onClear={clearLogs} onCommand={sendCommand} onSavePassword={savePassword} onSavePort={savePort} onSaveNapcatPort={saveNapcatPort} onSaveFramework={saveFramework} onOpenWebUi={openWebUi} onNotice={notify} /> : <PlaceholderPage active={active} onBack={() => navigate('QQ 账号')} />}
+        {active === '系统设置' ? <SettingsPage theme={theme} themePackage={themePackage} font={font} preferences={preferences} online={online} onThemeChange={setTheme} onThemePackageChange={setThemePackage} onFontChange={setFont} onPreferenceChange={updatePreference} onBack={returnToPreviousPage} onNavigate={navigate} onRefresh={refresh} onNotice={notify} /> : active === '概览' ? <OverviewPage bots={bots} stats={stats} napcat={napcat} online={online} logs={logs} refreshing={refreshing} refresh={refresh} onNavigate={navigate} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} /> : active === '运行状态' ? <RuntimeStatusPage bots={bots} system={system} stats={stats} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} /> : active === '插件管理' ? <PluginPage frameworks={pluginFrameworks} consolePlugins={consolePlugins} refreshing={refreshing} onRefresh={refresh} busy={busy} onToggle={togglePlugin} onToggleConsolePlugin={toggleConsolePlugin} onInstallConsolePlugin={installConsolePluginFromGit} onOpenPluginPage={openPluginPage} /> : ['NapCat', 'NoneBot', 'AstrBot'].includes(active) ? <ResourcePage key={active} kind={active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot'} resource={resources?.[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} officialUrl={OFFICIAL_RESOURCE_URLS[active === 'NapCat' ? 'napcat' : active === 'NoneBot' ? 'nonebot' : 'astrbot']} setup={resourceSetup} onOpenSetup={() => setResourceSetupOpen(true)} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onBack={returnToPreviousPage} /> : isAccountPage ? <AccountWorkspace bots={bots} selectedBot={selectedBot} selectedBotId={selectedBotId} setSelectedBotId={setSelectedBotId} napcat={napcat} online={online} refreshing={refreshing} refresh={refresh} busy={busy} action={action} onSelectBot={(botId) => { setSelectedBotId(botId); navigate('QQ 账号') }} onCreate={() => setCreateOpen(true)} onDelete={() => setDeleteTarget(selectedBot)} logs={logs} logsPaused={logsPaused} onTogglePause={() => { setLogsPaused(value => !value); notify(logsPaused ? '日志同步已恢复' : '日志同步已暂停') }} onClear={clearLogs} onCommand={sendCommand} onSavePassword={savePassword} onSavePort={savePort} onSaveNapcatPort={saveNapcatPort} onSaveFramework={saveFramework} onOpenWebUi={openWebUi} onNotice={notify} /> : isPluginPage ? <PluginPageShell component={pluginPageComponent} label={activePluginNav?.label} theme={theme} themePackage={themePackage} font={font} online={online} bots={bots} stats={stats} napcat={napcat} resources={resources} active={active} navigate={navigate} notify={notify} api={api} refresh={refresh} /> : <PlaceholderPage active={active} onBack={() => navigate('QQ 账号')} />}
       </main>
       </>}
     </div>
@@ -653,6 +739,25 @@ function App() {
     {resources && resourceSetupOpen && <ResourceSetupModal key={resourceSetup?.id || 'new'} resources={resources} setup={resourceSetup} onSetup={startResourceSetup} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onClose={() => setResourceSetupOpen(false)} />}
     {toast && <div className="toast"><span className="live-dot" />{toast}</div>}
   </div>
+}
+
+
+// 插件页面外壳：为插件提供的页面组件包裹统一的标题栏，并在组件尚未注册时给出加载提示。
+function PluginPageShell({ component: Component, label, navigate: nav, ...props }) {
+  return <section className="plugin-page">
+    <header className="plugin-page-header">
+      <div>
+        <div className="eyebrow">控制台插件</div>
+        <h1>{label || '插件页面'}</h1>
+      </div>
+      <button type="button" className="plain-icon" onClick={() => nav?.('插件管理')} title="返回插件管理" aria-label="返回插件管理">
+        <ChevronLeft size={17} />
+      </button>
+    </header>
+    {typeof Component === 'function'
+      ? <Component {...props} />
+      : <div className="plugin-empty"><Puzzle size={22} /><strong>插件页面加载中</strong><span>插件脚本加载完成后会自动显示，或刷新页面重试。</span></div>}
+  </section>
 }
 
 

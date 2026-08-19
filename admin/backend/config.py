@@ -20,6 +20,9 @@ ROOT = Path(
     os.getenv("QQ_BOT_ROOT", str(Path(__file__).resolve().parents[2]))
 ).expanduser().resolve()
 PROGRAM_DIR = ROOT / "program"
+PLUGINS_DIR = ROOT / "plugins"
+# 打包版由桌面主进程注入：内置插件位于 resources/plugins，用户插件位于 data 根目录。
+BUNDLED_PLUGINS_DIR = Path(os.getenv("QQ_BOT_PLUGINS_DIR", "")).expanduser().resolve() if os.getenv("QQ_BOT_PLUGINS_DIR") else None
 NONEBOT_DIR = PROGRAM_DIR / "NoneBot"
 ASTRBOT_DIR = PROGRAM_DIR / "AstrBot"
 NAPCAT_ROOT = PROGRAM_DIR / "NapCat"
@@ -30,6 +33,8 @@ EVENT_LOG_FILE = DATA_DIR / "events.jsonl"
 RESOURCE_CONFIG_FILE = DATA_DIR / "resources.json"
 SCRIPT_DIR = DATA_DIR / "scripts"
 PROCESS_LOG_DIR = DATA_DIR / "process-logs"
+# 控制台插件启停状态（plugin_id -> enabled 布尔值），独立于插件目录本身。
+CONSOLE_PLUGIN_STATE_FILE = DATA_DIR / "console-plugins.json"
 
 DEFAULT_NONEBOT_DIR = PROGRAM_DIR / "NoneBot"
 DEFAULT_ASTRBOT_DIR = PROGRAM_DIR / "AstrBot"

@@ -60,6 +60,12 @@ class PluginTogglePayload(BaseModel):
     enabled: bool
 
 
+class GitPluginInstallPayload(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    ref: str | None = Field(default=None, max_length=128)
+    replace: bool = False
+
+
 class StatsRecordPayload(BaseModel):
     bot_id: str = Field(min_length=1, max_length=80)
     direction: str = Field(pattern="^(received|sent)$")
@@ -199,6 +205,48 @@ async def request_shutdown(request: Request) -> dict[str, bool]:
 async def list_plugins(request: Request) -> dict[str, Any]:
     bots = await asyncio.to_thread(request.app.state.repository.list)
     return await asyncio.to_thread(request.app.state.plugin_registry.snapshot, bots)
+
+
+@router.get("/console-plugins")
+async def list_console_plugins(request: Request) -> dict[str, Any]:
+    return await asyncio.to_thread(request.app.state.console_plugin_registry.snapshot)
+
+
+@router.get("/console-plugins/{plugin_id}/readme")
+async def get_console_plugin_readme(plugin_id: str, request: Request) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(request.app.state.console_plugin_registry.read_documentation, plugin_id)
+    except KeyError as error:
+        raise HTTPException(404, "插件不存在") from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@router.post("/console-plugins/install-git")
+async def install_console_plugin_from_git(payload: GitPluginInstallPayload, request: Request) -> dict[str, Any]:
+    try:
+        result = await asyncio.to_thread(
+            request.app.state.console_plugin_registry.install_from_git,
+            payload.url,
+            payload.ref,
+            payload.replace,
+        )
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    plugin = result.get("plugin") or {}
+    await request.app.state.event_bus.publish("INFO", "系统", f"已从 Git 安装控制台插件「{plugin.get('name') or plugin.get('id') or '未知插件'}」")
+    return {**result, "plugins": request.app.state.console_plugin_registry.snapshot()["plugins"]}
+
+
+@router.put("/console-plugins/{plugin_id}")
+async def update_console_plugin(plugin_id: str, payload: PluginTogglePayload, request: Request) -> dict[str, Any]:
+    try:
+        await asyncio.to_thread(request.app.state.console_plugin_registry.set_enabled, plugin_id, payload.enabled)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    action = "启用" if payload.enabled else "停用"
+    await request.app.state.event_bus.publish("INFO", "系统", f"已{action}控制台插件「{plugin_id}」")
+    return await asyncio.to_thread(request.app.state.console_plugin_registry.snapshot)
 
 
 @router.put("/plugins/{plugin_id}")

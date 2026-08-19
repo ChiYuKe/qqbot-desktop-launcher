@@ -1,0 +1,230 @@
+/* 示例插件自定义样式。
+ *
+ * 插件 frontend.js 通过动态注入 <link> 标签加载本文件。
+ * 路径：/plugin-assets/example-plugin/style.css
+ * CSS 选择器加上 .monitor- 前缀避免与宿主样式冲突。
+ */
+
+.monitor-page {
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+.monitor-loading {
+  padding: 60px 42px;
+  color: var(--muted, #9aa3ae);
+  font-size: 13px;
+  text-align: center;
+}
+
+.monitor-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding: 10px 16px;
+  background: var(--panel, #f0f2f5);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--muted, #6b7685);
+}
+
+.monitor-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .4; }
+}
+
+.monitor-updated {
+  margin-left: auto;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+}
+
+.monitor-error {
+  margin-left: 12px;
+  color: #ef4444;
+  font-size: 11px;
+}
+
+.monitor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.monitor-card {
+  padding: 18px 20px 20px;
+}
+
+.monitor-meter {
+  margin-top: 12px;
+}
+
+.monitor-meter-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 5px;
+  font-size: 12px;
+  color: var(--muted, #6b7685);
+}
+
+.monitor-meter-head strong {
+  font-size: 13px;
+  color: var(--ink, #2c3e50);
+}
+
+.monitor-meter-track {
+  height: 6px;
+  background: #e4e7ec;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.monitor-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: #3b82f6;
+  transition: width .6s ease;
+}
+
+.monitor-meter-fill.high {
+  background: #ef4444;
+}
+
+.monitor-uptime {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.monitor-uptime strong {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--ink, #2c3e50);
+  letter-spacing: -.3px;
+}
+
+.monitor-process-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.monitor-process-group {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--panel, #f0f2f5);
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--muted, #6b7685);
+}
+
+.monitor-process-group strong {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--ink, #2c3e50);
+}
+
+.monitor-kind {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
+.monitor-kind.console { background: #eef2ff; color: #4f46e5; }
+.monitor-kind.backend { background: #f0fdf4; color: #16a34a; }
+.monitor-kind.framework { background: #fef3c7; color: #b45309; }
+.monitor-kind.napcat { background: #fee2e2; color: #dc2626; }
+
+.monitor-empty {
+  padding: 24px;
+  color: var(--muted, #9aa3ae);
+  font-size: 12px;
+  text-align: center;
+}
+
+.monitor-processes {
+  padding: 18px 20px 20px;
+}
+
+.monitor-table {
+  width: 100%;
+  margin-top: 12px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.monitor-table th {
+  padding: 6px 8px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted, #6b7685);
+  border-bottom: 1px solid #edf0f3;
+}
+
+.monitor-table td {
+  padding: 6px 8px;
+  color: var(--ink, #2c3e50);
+  border-bottom: 1px solid #f0f2f5;
+  font-family: ui-monospace, Consolas, monospace;
+}
+
+.monitor-table tbody tr:hover {
+  background: #f8f9fb;
+}
+
+/* 深色主题适配 */
+:root[data-theme="dark"] .monitor-meter-track {
+  background: #2d3540;
+}
+
+:root[data-theme="dark"] .monitor-table th {
+  border-bottom-color: #2d3540;
+}
+
+:root[data-theme="dark"] .monitor-table td {
+  border-bottom-color: #1e2530;
+}
+
+:root[data-theme="dark"] .monitor-table tbody tr:hover {
+  background: #1e2530;
+}
+
+:root[data-theme="dark"] .monitor-process-group {
+  background: #1a1f29;
+}
+
+:root[data-theme="dark"] .monitor-kind.console { background: #1e1f4a; color: #818cf8; }
+:root[data-theme="dark"] .monitor-kind.backend { background: #052e16; color: #4ade80; }
+:root[data-theme="dark"] .monitor-kind.framework { background: #3b2f00; color: #fbbf24; }
+:root[data-theme="dark"] .monitor-kind.napcat { background: #3b0a0a; color: #f87171; }
+
+/* 监控页字号略微放大并提升字重，改善低分辨率下的可读性。 */
+.monitor-page { font-size: 13px; font-weight: 600; }
+.monitor-loading { font-size: 14px; }
+.monitor-status { font-size: 13px; }
+.monitor-updated, .monitor-error { font-size: 12px; font-weight: 500; }
+.monitor-meter-head { font-size: 13px; }
+.monitor-meter-head strong { font-size: 14px; }
+.monitor-uptime strong { font-size: 24px; }
+.monitor-process-group { font-size: 13px; }
+.monitor-process-group strong { font-size: 19px; }
+.monitor-kind { font-size: 12px; }
+.monitor-empty { font-size: 13px; }
+.monitor-table { font-size: 13px; }
+.monitor-table th { font-size: 13px; font-weight: 700; }
+.monitor-table td { font-size: 13px; font-weight: 500; }

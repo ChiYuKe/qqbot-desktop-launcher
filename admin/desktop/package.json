@@ -37,6 +37,10 @@
       {
         "from": "runtime-python",
         "to": "python-runtime"
+      },
+      {
+        "from": "../../plugins",
+        "to": "plugins"
       }
     ],
     "win": {

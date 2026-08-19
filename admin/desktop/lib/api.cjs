@@ -125,6 +125,11 @@ async function startApi() {
     QQ_BOT_ROOT: runtimeRoot,
   }
   if (runtime.bundledRuntime && fs.existsSync(runtime.bundledPython)) environment.QQ_BOT_PYTHON = runtime.bundledPython
+  // 打包版把 plugins/ 一起打包进 resources；传给后端以便合并内置插件与用户插件。
+  if (runtime.bundledRuntime) {
+    const bundledPlugins = path.join(process.resourcesPath, 'plugins')
+    if (fs.existsSync(bundledPlugins)) environment.QQ_BOT_PLUGINS_DIR = bundledPlugins
+  }
   state.apiProcess = spawn(command, args, {
     cwd: runtimeRoot,
     windowsHide: true,

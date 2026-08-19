@@ -277,12 +277,6 @@
 :root[data-theme="dark"][data-theme-package="blue"] .create-modal,
 :root[data-theme="dark"][data-theme-package="blue"] .delete-modal { color: var(--ink); background: var(--panel); }
 :root[data-theme="dark"][data-theme-package="blue"] .resource-setup-item.setup-option.selected { background: var(--selected); }
-:root[data-theme="dark"][data-theme-package="blue"] .activity-feed::-webkit-scrollbar-track,
-:root[data-theme="dark"][data-theme-package="blue"] .settings-main::-webkit-scrollbar-track,
-:root[data-theme="dark"][data-theme-package="blue"] .plugin-page::-webkit-scrollbar-track { background: var(--panel); }
-:root[data-theme="dark"][data-theme-package="blue"] .activity-feed::-webkit-scrollbar-thumb,
-:root[data-theme="dark"][data-theme-package="blue"] .settings-main::-webkit-scrollbar-thumb,
-:root[data-theme="dark"][data-theme-package="blue"] .plugin-page::-webkit-scrollbar-thumb { background: #426987; border-color: var(--panel); }
 
 .theme-package-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .theme-package-card { min-width: 0; padding: 0; overflow: hidden; color: var(--muted); background: var(--panel); border: 1px solid var(--line); border-radius: 11px; text-align: left; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
@@ -448,13 +442,6 @@
 :root[data-theme="dark"][data-theme-package="blue"] .app-shell::after { border-color: rgba(102, 132, 153, .26); box-shadow: 0 0 22px rgba(0, 0, 0, .22); }
 :root[data-theme="dark"][data-theme-package="blue"] .theme-option.selected .theme-preview { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(90, 174, 229, .18); }
 :root[data-theme="dark"][data-theme-package="blue"] .settings-font-select-option.selected { background: #29445a; }
-:root[data-theme="dark"][data-theme-package="blue"] .plugin-page { scrollbar-color: #526676 #151a20; }
-:root[data-theme="dark"][data-theme-package="blue"] .plugin-page::-webkit-scrollbar-track,
-:root[data-theme="dark"][data-theme-package="blue"] .activity-feed::-webkit-scrollbar-track,
-:root[data-theme="dark"][data-theme-package="blue"] .settings-main::-webkit-scrollbar-track { background: #151a20; }
-:root[data-theme="dark"][data-theme-package="blue"] .plugin-page::-webkit-scrollbar-thumb,
-:root[data-theme="dark"][data-theme-package="blue"] .activity-feed::-webkit-scrollbar-thumb,
-:root[data-theme="dark"][data-theme-package="blue"] .settings-main::-webkit-scrollbar-thumb { background: #526676; border-color: #151a20; }
 :root[data-theme-package="blue"] .runtime-metric-icon,
 :root[data-theme-package="blue"] .runtime-metric-icon.purple,
 :root[data-theme-package="blue"] .runtime-metric-icon.green,

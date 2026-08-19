@@ -19,6 +19,7 @@ from backend.database.stats_repository import MessageStatsRepository
 from backend.domain.errors import DomainError
 from backend.event.bus import EventBus
 from backend.manager.bot_manager import BotManager
+from backend.plugin.console_plugin import ConsolePluginRegistry, assets_router
 from backend.plugin.registry import PluginRegistry
 from backend.service.bot_service import BotService
 from backend.security.session import request_authorized
@@ -75,6 +76,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.bot_manager = manager
     app.state.bot_service = BotService(repository, manager, event_bus, stats)
     app.state.plugin_registry = PluginRegistry()
+    app.state.console_plugin_registry = ConsolePluginRegistry()
+    app.state.console_plugin_registry.load_backend(app)
     manager.recover_external_logs()
     manager.start_supervisor()
     await event_bus.publish("INFO", "系统", f"管理 API 已启动，已加载 {len(repository.list())} 个 Bot")
@@ -123,6 +126,7 @@ def create_app() -> FastAPI:
     application.add_middleware(RequestContextMiddleware)
     application.include_router(api_router)
     application.include_router(websocket_router)
+    application.include_router(assets_router)
     return application
 
 
