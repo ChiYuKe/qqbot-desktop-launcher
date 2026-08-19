@@ -30,11 +30,11 @@ QQBot Desktop Launcher 是一个面向 Windows 的个人本地 QQ Bot 快速启�
 - 管理多个 QQ 账号及各自的 OneBot、NapCat WebUI 端口
 - 启动、停止和查看 Bot 运行状态
 - 实时查看当前运行日志、登录二维码和安全验证信息
-- 在 NapCat WebUI、AstrBot WebUI 之间切换
+- 在 NapCat WebUI、AstrBot WebUI 和插件 WebUI 之间切换，嵌入式页面可收起为可拖拽悬浮球
 - 选择或一键配置 NoneBot、AstrBot 和 NapCat 运行资源
 - 管理 NoneBot 与 AstrBot 的插件信息
 - 支持浅色、深色和系统主题，以及主题插件包
-- 桌面控制台插件扩展：plugins/ 目录下的插件可新增导航页面和后端接口，无需重新打包
+- 桌面控制台插件扩展：plugins/ 目录下的插件可新增导航页面、后端接口、配置弹窗（声明式 settings.json 自动渲染表单）和顶部 WebUI 菜单项，无需重新打包
 - 账号、日志、资源路径和运行配置保存在本机
 
 NapCat 是 QQ 协议端，NoneBot 和 AstrBot 是机器人框架。一个 QQ 账号应选择一个机器人框架，NapCat 负责连接 QQ，框架负责消息处理和插件运行。
