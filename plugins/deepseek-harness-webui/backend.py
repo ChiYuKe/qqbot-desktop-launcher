@@ -194,13 +194,31 @@ def _spawn(root: Path, port: int, show_window: bool) -> subprocess.Popen[str]:
     return process
 
 
+def _find_by_port(port: int) -> psutil.Process | None:
+    """Return the process that is listening on *port*, or ``None``."""
+    try:
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.laddr.port == port and conn.status == "LISTEN":
+                return psutil.Process(conn.pid)
+    except (psutil.AccessDenied, OSError):
+        pass
+    return None
+
+
 def _processes() -> list[psutil.Process]:
-    process = _dsh_process
-    if process is None or process.poll() is not None:
+    """Return the DSH process tree found by the configured listening port.
+
+    Using port-based discovery is more robust than tracking the
+    ``subprocess.Popen`` handle because on Windows ``pnpm.cmd`` is
+    executed through a transient ``cmd.exe`` wrapper whose PID may
+    differ from the long-running ``node`` server.
+    """
+    _root, port, _url, _show = _settings()
+    listener = _find_by_port(port)
+    if listener is None:
         return []
     try:
-        root = psutil.Process(process.pid)
-        return [root, *root.children(recursive=True)]
+        return [listener, *listener.children(recursive=True)]
     except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
         return []
 
@@ -208,16 +226,45 @@ def _processes() -> list[psutil.Process]:
 def _stop_dsh() -> None:
     global _dsh_process
     with _START_LOCK:
-        process = _dsh_process
+        tracked = _dsh_process
         _dsh_process = None
-        if process is None:
+
+        _root, port, _url, _show = _settings()
+        listener = _find_by_port(port)
+
+        if listener is None and tracked is None:
             return
-        if process.poll() is None:
-            _publish_log("INFO", "正在停止 DeepSeek Harness WebUI 及其后台进程")
+        if listener is None and tracked is not None and tracked.poll() is not None:
+            return
+
+        _publish_log("INFO", "正在停止 DeepSeek Harness WebUI 及其后台进程")
+
+        if listener is not None:
             if os.name == "nt":
                 try:
                     subprocess.run(
-                        ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                        ["taskkill", "/PID", str(listener.pid), "/T", "/F"],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                        timeout=10,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            else:
+                try:
+                    listener.terminate()
+                except psutil.Error:
+                    pass
+
+        # Fallback: kill the tracked wrapper process if it is still alive.
+        if tracked is not None and tracked.poll() is None:
+            if os.name == "nt":
+                try:
+                    subprocess.run(
+                        ["taskkill", "/PID", str(tracked.pid), "/T", "/F"],
                         stdin=subprocess.DEVNULL,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
@@ -227,32 +274,34 @@ def _stop_dsh() -> None:
                     )
                 except (OSError, subprocess.TimeoutExpired):
                     try:
-                        process.kill()
+                        tracked.kill()
                     except OSError:
                         pass
             else:
-                process.terminate()
-
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
+                tracked.terminate()
             try:
-                process.kill()
-                process.wait(timeout=5)
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+                tracked.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    tracked.kill()
+                    tracked.wait(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
 
-        if process.poll() is None:
-            _publish_log("ERROR", "DeepSeek Harness WebUI 进程未能完全停止")
-        else:
-            _publish_log("INFO", "DeepSeek Harness WebUI 已停止")
+        if listener is not None:
+            try:
+                if listener.is_running():
+                    _publish_log("ERROR", "DeepSeek Harness WebUI 进程未能完全停止")
+                    return
+            except psutil.Error:
+                pass
+        _publish_log("INFO", "DeepSeek Harness WebUI 已停止")
 
 
 def on_settings_changed(_: dict[str, Any]) -> None:
     """配置变化后停止旧实例，下一次打开时使用新的目录和端口。"""
-    if _dsh_process is not None:
-        _publish_log("INFO", "DeepSeek Harness 配置已更新，正在停止旧 WebUI 进程")
-        _stop_dsh()
+    _publish_log("INFO", "DeepSeek Harness 配置已更新，正在停止旧 WebUI 进程")
+    _stop_dsh()
 
 
 def shutdown() -> None:

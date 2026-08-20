@@ -22,7 +22,7 @@
       "id": "dsh_show_window",
       "type": "boolean",
       "label": "启动时显示命令窗口",
-      "default": true,
+      "default": false,
       "description": "关闭时 DSH 进程在后台无窗口启动；开启后显示控制台命令窗口，便于查看 dsh web 输出"
     }
   ]
