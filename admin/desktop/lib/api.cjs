@@ -257,7 +257,11 @@ async function stopApiProcess() {
   state.apiStopping = true
   await requestBackendShutdown()
   const exited = await waitForApiExit()
-  if (!exited && process.platform === 'win32') {
+  if (process.platform === 'win32') {
+    // Always clean up the process tree on Windows to ensure child processes
+    // (e.g. DSH started by console plugins) are terminated even when the
+    // backend exits gracefully.  taskkill is a no-op when the process has
+    // already exited.
     spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
   } else if (!exited) {
     try { process.kill(pid, 'SIGTERM') } catch {}

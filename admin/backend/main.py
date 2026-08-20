@@ -86,6 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         await app.state.bot_service.shutdown()
         await manager.shutdown()
+        app.state.console_plugin_registry.shutdown_all()
         await event_bus.stop()
 
 

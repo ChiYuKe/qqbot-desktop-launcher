@@ -341,6 +341,11 @@ class ConsolePluginRegistry:
         except Exception:  # noqa: BLE001 - one plugin must not block its own disable action
             _LOGGER.exception("控制台插件 %s 停用清理失败", plugin_id)
 
+    def shutdown_all(self) -> None:
+        """管理服务退出时关闭所有已加载插件后端，释放子进程等资源。"""
+        for plugin_id in list(self._backend_modules):
+            self._shutdown_backend_for(plugin_id)
+
     def set_enabled(self, plugin_id: str, enabled: bool) -> None:
         """记录插件启停状态；停用时清理后端，启用时补加载。"""
         if plugin_id not in self.plugins:
