@@ -23,6 +23,7 @@
 | --- | --- |
 | `GET /api/plugins/example/overview` | 返回 CPU、内存、磁盘和 QQBot 运行计数。 |
 | `GET /api/plugins/example/processes` | 返回 QQBot 相关进程及其分组统计。 |
+| `POST /api/plugins/example/kill` | 结束指定进程（危险操作），请求体 `{ pid, name, tree }`。管理后端与桌面控制台等关键进程会被拒绝保护。 |
 
 ## 开发说明
 

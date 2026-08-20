@@ -164,6 +164,13 @@
   background: #f8f9fb;
 }
 
+/* 复用宿主 .action-button 样式；仅重置表格强制等宽字体，使按钮与宿主其他按钮一致。 */
+.monitor-table td .monitor-kill-cell.action-button {
+  font-family: var(--app-font-family, "HarmonyOS Sans SC", "Segoe UI", "Microsoft YaHei UI", sans-serif);
+  height: 26px;
+  padding: 0 10px;
+}
+
 /* 深色主题适配 */
 :root[data-theme="dark"] .monitor-meter-track {
   background: #2d3540;

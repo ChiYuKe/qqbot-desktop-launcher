@@ -8,11 +8,13 @@ Bot 框架（NoneBot / AstrBot）与 NapCat 协议端。
 from __future__ import annotations
 
 import os
+import subprocess
+import time
 from datetime import datetime
 from typing import Any
 
 import psutil
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 
 router = APIRouter(prefix="/api/plugins/example")
@@ -77,18 +79,25 @@ def _descends_from(process: psutil.Process, ancestor_pid: int) -> bool:
 _cpu_samples: dict[int, psutil.Process] = {}
 
 
-def _sample_cpu(pid: int) -> float:
-    process = _cpu_samples.get(pid)
-    if process is None:
+def _sample_cpu(process: psutil.Process) -> float:
+    """Return the CPU usage percentage for *process*.
+
+    On the first call for a given PID a baseline is established and 0.0 is
+    returned; subsequent calls return the actual usage since the last call.
+    The same ``psutil.Process`` instance must be reused across calls, which
+    is why we cache by PID.
+    """
+    pid = process.pid
+    cached = _cpu_samples.get(pid)
+    if cached is None:
         try:
-            process = psutil.Process(pid)
-            process.cpu_percent(interval=None)  # 首次调用只建立采样基准
-            _cpu_samples[pid] = process
+            process.cpu_percent(interval=None)  # baseline
         except psutil.Error:
             return 0.0
+        _cpu_samples[pid] = process
         return 0.0
     try:
-        return process.cpu_percent(interval=None)
+        return cached.cpu_percent(interval=None)
     except psutil.Error:
         _cpu_samples.pop(pid, None)
         return 0.0
@@ -143,16 +152,24 @@ async def processes(request: Request) -> dict[str, Any]:
         if pid in seen:
             return
         seen.add(pid)
+
+        cpu = _sample_cpu(process)
+
         try:
-            cpu = _sample_cpu(pid)
             memory = process.memory_percent()
+        except psutil.Error:
+            memory = 0.0
+
+        try:
             create_time = process.create_time()
+        except psutil.Error:
+            create_time = 0.0
+
+        try:
             name = process.name() or "?"
         except psutil.Error:
-            cpu = 0.0
-            memory = 0.0
-            create_time = 0.0
             name = "?"
+
         rows.append(
             {
                 "pid": pid,
@@ -160,8 +177,8 @@ async def processes(request: Request) -> dict[str, Any]:
                 "kind": kind,
                 "group": group_label,
                 "bot_name": bot_name,
-                "cpu": round(cpu, 1),
-                "memory": round(memory, 1),
+                "cpu": round(cpu, 2),
+                "memory": round(memory, 2),
                 "started_at": int(create_time),
             }
         )
@@ -227,6 +244,110 @@ async def processes(request: Request) -> dict[str, Any]:
         "groups": groups,
         "processes": rows,
     }
+
+
+def _protected_pids() -> set[int]:
+    """返回不允许结束的关键进程 PID 集合：管理后端自身及其 Electron 桌面控制台。
+
+    结束这些进程会导致正在展示本页面的控制台（或其后端）崩溃，因此必须保护。
+    """
+    protected = {os.getpid()}  # 管理后端（FastAPI）自身
+    console_root = _find_console_root(os.getpid())
+    if console_root is not None:
+        protected.add(console_root.pid)
+        try:
+            for child in console_root.children(recursive=True):
+                if _is_console_process(child):
+                    protected.add(child.pid)
+        except psutil.Error:
+            pass
+    return protected
+
+
+def _terminate(process: psutil.Process, force_tree: bool) -> None:
+    """按平台终止进程；force_tree 为 True 时一并结束子进程树。"""
+    if os.name == "nt":
+        args = ["taskkill", "/PID", str(process.pid), "/F"]
+        if force_tree:
+            args.append("/T")
+        subprocess.run(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return
+    # Unix：先温和终止，超时后再强制结束。
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+    except (psutil.TimeoutExpired, psutil.Error):
+        try:
+            process.kill()
+        except psutil.Error:
+            pass
+
+
+@router.post("/kill")
+async def kill_process(payload: dict[str, Any]) -> dict[str, Any]:
+    """结束指定进程（危险操作）。
+
+    请求体：{"pid": int, "name": str, "tree": bool}
+    - pid：目标进程 PID（必填）
+    - name：进程名，用于校验该 PID 未被系统复用，避免误杀其他进程
+    - tree：是否一并结束子进程树，默认 False
+    """
+    raw_pid = payload.get("pid")
+    try:
+        pid = int(raw_pid)
+    except (TypeError, ValueError):
+        raise HTTPException(422, "pid 必须是正整数")
+    if pid <= 0:
+        raise HTTPException(422, "pid 必须是正整数")
+
+    if pid in _protected_pids():
+        raise HTTPException(403, "该进程是管理服务或桌面控制台的关键进程，禁止结束")
+
+    try:
+        process = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        raise HTTPException(404, f"进程 {pid} 不存在")
+
+    # 名称校验，防止 PID 被回收复用后误杀新进程。
+    expected_name = payload.get("name")
+    if expected_name:
+        try:
+            actual_name = process.name()
+        except psutil.Error:
+            actual_name = None
+        if actual_name is not None and actual_name.lower() != str(expected_name).lower():
+            raise HTTPException(409, f"进程已变化（期望 {expected_name}，实际 {actual_name}），请刷新后重试")
+
+    _terminate(process, bool(payload.get("tree", False)))
+
+    # taskkill /F 是异步强制终止：Windows 上进程句柄需要数百毫秒才完全回收，
+    # PID 不会在命令返回后立刻从系统消失。轮询一小段时间等待进程真正退出，
+    # 避免把已经正常关闭的进程误判为"未能完全终止"（导致前端误报失败）。
+    _KILL_WAIT_SECONDS = 3.0
+    wait_deadline = time.monotonic() + _KILL_WAIT_SECONDS
+    while time.monotonic() < wait_deadline:
+        try:
+            if not (process.is_running() and process.status() != psutil.STATUS_ZOMBIE):
+                break
+        except psutil.NoSuchProcess:
+            break  # 进程已彻底退出
+        except psutil.Error:
+            pass  # AccessDenied 等：无法读取状态，交由超时统一判定
+        time.sleep(0.05)
+    else:
+        raise HTTPException(500, f"进程 {pid} 未能完全终止")
+
+    # 清理已结束进程的 CPU 采样缓存，避免后续请求读取已不存在的 Process 对象。
+    _cpu_samples.pop(pid, None)
+    return {"ok": True, "pid": pid}
 
 
 def register(app) -> None:

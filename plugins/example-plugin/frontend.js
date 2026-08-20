@@ -83,6 +83,63 @@
       }
     }, [api])
 
+    // 结束进程确认弹窗状态。
+    var [confirmTarget, setConfirmTarget] = useState(null)
+    var [killing, setKilling] = useState(false)
+
+    function openConfirm(proc) {
+      setConfirmTarget(proc)
+    }
+
+    function closeConfirm() {
+      if (!killing) setConfirmTarget(null)
+    }
+
+    function doKill() {
+      var proc = confirmTarget
+      if (!proc) return
+      setKilling(true)
+      api('/api/plugins/example/kill', {
+        method: 'POST',
+        body: JSON.stringify({ pid: proc.pid, name: proc.name }),
+      })
+        .then(function () {
+          setConfirmTarget(null)
+          setProcessData(function (prev) {
+            return {
+              groups: prev.groups,
+              processes: (prev.processes || []).filter(function (p) { return p.pid !== proc.pid }),
+            }
+          })
+        })
+        .catch(function (err) {
+          window.alert('结束进程失败：' + (err && err.message ? err.message : String(err)))
+        })
+        .finally(function () {
+          setKilling(false)
+        })
+    }
+
+    function ConfirmModal() {
+      if (!confirmTarget) return null
+      var protectedKind = confirmTarget.kind === 'console' || confirmTarget.kind === 'backend'
+      var warning = '进程：' + confirmTarget.name + '　PID：' + confirmTarget.pid + '　分组：' + confirmTarget.group + '\n\n' +
+        (protectedKind ? '这是关键进程，结束后控制台或管理服务可能崩溃。' : '结束将立即终止该进程，可能导致其相关服务（Bot 框架、NapCat、DeepSeek Harness 等）中断。') +
+        '\n\n此操作无法撤销。'
+      return React.createElement('div', { className: 'modal-backdrop', onMouseDown: function (event) { if (event.target === event.currentTarget) closeConfirm() } },
+        React.createElement('div', { className: 'delete-modal', role: 'alertdialog', 'aria-modal': 'true' },
+          React.createElement('div', { className: 'modal-header' },
+            React.createElement('div', null,
+              React.createElement('div', { className: 'eyebrow' }, '系统监控'),
+              React.createElement('h2', null, '结束进程'),
+              React.createElement('p', null, '确认结束「' + confirmTarget.name + '」？')),
+            React.createElement('button', { type: 'button', className: 'modal-close', onClick: closeConfirm, disabled: killing, 'aria-label': '关闭' }, '×')),
+          React.createElement('div', { className: 'delete-warning' }, warning),
+          React.createElement('div', { className: 'modal-actions' },
+            React.createElement('button', { type: 'button', className: 'secondary', onClick: closeConfirm, disabled: killing }, '取消'),
+            React.createElement('button', { type: 'button', className: 'action-button danger', onClick: doKill, disabled: killing }, killing ? '结束中…' : '确认结束'))))
+    }
+
     // 空态：数据还没回来。
     if (!overview) {
       return React.createElement('div', { className: 'monitor-loading' },
@@ -142,7 +199,8 @@
                   React.createElement('th', null, '进程'),
                   React.createElement('th', null, 'PID'),
                   React.createElement('th', null, 'CPU %'),
-                  React.createElement('th', null, '内存 %'))),
+                  React.createElement('th', null, '内存 %'),
+                  React.createElement('th', null, '操作'))),
               React.createElement('tbody', null, processes.map(function (proc, index) {
                 return React.createElement('tr', { key: proc.pid || index },
                   React.createElement('td', null,
@@ -150,10 +208,17 @@
                       proc.group + (proc.bot_name ? ' · ' + proc.bot_name : ''))),
                   React.createElement('td', null, proc.name),
                   React.createElement('td', null, proc.pid),
-                  React.createElement('td', null, proc.cpu.toFixed(1)),
-                  React.createElement('td', null, proc.memory.toFixed(1)))
+                  React.createElement('td', null, proc.cpu.toFixed(2)),
+                  React.createElement('td', null, proc.memory.toFixed(2)),
+                  React.createElement('td', null,
+                    React.createElement('button', {
+                      className: 'action-button danger monitor-kill-cell',
+                      onClick: function () { openConfirm(proc) },
+                    }, '结束')))
               })))
-          : React.createElement('div', { className: 'monitor-empty' }, '没有发现相关进程')))
+          : React.createElement('div', { className: 'monitor-empty' }, '没有发现相关进程')),
+      // 结束进程确认弹窗：复用宿主 .modal-backdrop / .delete-modal 样式。
+      React.createElement(ConfirmModal))
   }
 
   window.__DSH_PLUGINS__.register({
