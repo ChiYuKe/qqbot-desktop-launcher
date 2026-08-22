@@ -261,7 +261,7 @@ button:disabled { opacity: .45; cursor: wait; }
 .config-field .password-input-wrap input:focus { border-color: #afa7f4; box-shadow: 0 0 0 3px rgba(109,92,231,.1); }
 .config-actions { grid-column: 2; display: flex; align-items: flex-end; justify-content: flex-end; margin-top: 11px; }
 .secondary { height: 32px; gap: 7px; padding: 0 11px; color: #677383; background: #fff; border: 1px solid var(--line-strong); border-radius: 7px; font-size: 11px; }.secondary:hover { color: var(--ink); background: #f7f8fa; }
-.toast { position: fixed; bottom: 22px; left: 50%; z-index: 10; display: flex; align-items: center; gap: 9px; padding: 10px 13px; color: #425064; background: rgba(255,255,255,.95); border: 1px solid #d9dee7; border-radius: 8px; box-shadow: 0 12px 36px rgba(50,50,80,.18); font-size: 11px; transform: translateX(-50%); }.live-dot { width: 6px; height: 6px; flex: none; display: inline-block; border-radius: 50%; background: var(--green); }
+.toast { position: fixed; bottom: 22px; left: 50%; z-index: 10; display: flex; align-items: center; gap: 9px; padding: 10px 13px; color: #425064; background: rgba(255,255,255,.68); border: 1px solid rgba(217,222,231,.85); border-radius: 8px; box-shadow: 0 12px 36px rgba(50,50,80,.18); backdrop-filter: blur(14px); font-size: 11px; transform: translateX(-50%); }.live-dot { width: 6px; height: 6px; flex: none; display: inline-block; border-radius: 50%; background: var(--green); }
 .webui-launch-backdrop { position: fixed; inset: 0; z-index: 140; display: grid; place-items: center; background: rgba(18, 20, 27, .34); backdrop-filter: blur(3px); }
 .webui-launch-dialog { width: min(360px, calc(100vw - 32px)); min-width: 0; box-sizing: border-box; display: flex; align-items: center; gap: 13px; padding: 17px 21px; color: var(--ink); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 10px; box-shadow: 0 18px 50px rgba(0, 0, 0, .24); }
 .webui-launch-icon { width: 38px; height: 38px; display: grid; place-items: center; color: var(--accent); background: var(--selected); border-radius: 10px; }
@@ -584,7 +584,7 @@ button:disabled { opacity: .45; cursor: wait; }
 :root:not([data-theme="dark"]) .nav-item.active { font-weight: 650; }
 :root:not([data-theme="dark"]) .nav-section-label { margin: 25px 12px 9px; font-size: 11px; }
 :root:not([data-theme="dark"]) .favorite-toggle { width: 34px; height: 42px; border-radius: 0 9px 9px 0; }
-:root:not([data-theme="dark"]) .sidebar-bottom { gap: 7px; padding-top: 12px; }
+:root:not([data-theme="dark"]) .sidebar-bottom { gap: 7px; padding-top: 8px; }
 :root:not([data-theme="dark"]) .bottom-item { height: 38px; gap: 13px; padding: 0 12px; font-size: 14px; }
 :root:not([data-theme="dark"]) .bottom-item svg { width: 18px; height: 18px; }
 :root:not([data-theme="dark"]) .main-content.runtime-mode { background: #f8fafc; }
@@ -1050,7 +1050,7 @@ body { font-weight: 500; }
 :root[data-theme="dark"] .empty-detail-icon { color: #9cdcfe; background: transparent; border: 0; }
 :root[data-theme="dark"] .placeholder h2, :root[data-theme="dark"] .settings-empty h2, :root[data-theme="dark"] .empty-detail h2 { color: #cccccc; }
 :root[data-theme="dark"] .placeholder p, :root[data-theme="dark"] .settings-empty p, :root[data-theme="dark"] .empty-detail p { color: #858585; }
-:root[data-theme="dark"] .toast { color: #cccccc; background: rgba(37, 37, 38, .98); border-color: #3e3e42; box-shadow: 0 12px 36px rgba(0, 0, 0, .35); }
+:root[data-theme="dark"] .toast { color: #cccccc; background: rgba(37, 37, 38, .68); border-color: rgba(62, 62, 66, .85); box-shadow: 0 12px 36px rgba(0, 0, 0, .35); }
 :root[data-theme="dark"] .create-modal, :root[data-theme="dark"] .delete-modal { background: #252526; border: 0; }
 :root[data-theme="dark"] .action-button, :root[data-theme="dark"] .soft-button, :root[data-theme="dark"] .secondary, :root[data-theme="dark"] .modal-close, :root[data-theme="dark"] .password-toggle { border-color: transparent; box-shadow: none; }
 :root[data-theme="dark"] .action-button.danger, :root[data-theme="dark"] .modal-actions .action-button { border-color: transparent; box-shadow: none; }

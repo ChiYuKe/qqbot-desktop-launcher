@@ -69,6 +69,7 @@ body {
 .embedded-webui-fab { position: fixed; right: 24px; bottom: 24px; z-index: 120; width: 48px; height: 48px; display: grid; place-items: center; }
 .embedded-webui-fab[data-tooltip]::after { top: auto; right: 0; bottom: calc(100% + 7px); }
 .sidebar { padding: 18px 16px 16px; }
+.sidebar, :root[data-theme] .sidebar { padding-bottom: 8px; }
 .sidebar-nav { gap: 5px; margin-top: 9px; }
 .nav-item-wrap,
 .nav-item { border-radius: 9px; }
@@ -76,7 +77,7 @@ body {
 .nav-item svg { width: 18px; height: 18px; }
 .nav-section-label { margin: 25px 12px 9px; font-size: 11px; }
 .favorite-toggle { width: 34px; height: 42px; border-radius: 0 9px 9px 0; }
-.sidebar-bottom { gap: 7px; padding-top: 12px; position: relative; }
+.sidebar-bottom { gap: 7px; padding-top: 8px; position: relative; }
 .sidebar-bottom-actions { position: relative; display: grid; }
 .bottom-item { height: 38px; gap: 13px; padding: 0 12px; font-size: 14px; }
 .bottom-item svg { width: 18px; height: 18px; }
@@ -85,6 +86,7 @@ body {
 .more-menu-item:hover { color: var(--ink); background: var(--surface-strong); }
 .more-menu-item svg { width: 18px; height: 18px; }
 .help-modal { width: 460px; }
+.help-modal .modal-actions { margin-top: 32px; }
 .help-topics { display: grid; gap: 6px; }
 .help-topic { display: flex; align-items: flex-start; gap: 12px; padding: 11px 12px; border-radius: 9px; background: var(--surface-strong); }
 .help-topic-icon { flex: none; display: grid; place-items: center; width: 30px; height: 30px; color: var(--accent); background: var(--selected); border-radius: 8px; }
