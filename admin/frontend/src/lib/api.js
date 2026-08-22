@@ -36,6 +36,44 @@ export function dashboardApi(path) {
   return api(path, undefined, DASHBOARD_REQUEST_TIMEOUT_MS)
 }
 
+export async function copyText(value) {
+  const text = String(value ?? '')
+  if (!text) return false
+
+  // The desktop shell loads the panel from file://, where navigator.clipboard
+  // is unavailable. Use the Electron bridge first when it is present.
+  if (typeof window.clipboard?.writeText === 'function') {
+    try {
+      const copied = await window.clipboard.writeText(text)
+      if (copied !== false) return true
+    } catch {
+      // Fall through to browser clipboard implementations.
+    }
+  }
+
+  if (typeof navigator.clipboard?.writeText === 'function') {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      // Fall through to the synchronous DOM fallback.
+    }
+  }
+
+  const input = document.createElement('textarea')
+  input.value = text
+  input.setAttribute('readonly', '')
+  input.style.position = 'fixed'
+  input.style.opacity = '0'
+  document.body.appendChild(input)
+  input.select()
+  try {
+    return document.execCommand('copy')
+  } finally {
+    input.remove()
+  }
+}
+
 export async function fetchAuthenticatedBlob(path) {
   const token = apiToken()
   const response = await fetch(`${API_BASE}${path}`, {

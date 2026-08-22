@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('desktopConfig', {
   setTrayOnClose: (enabled) => ipcRenderer.send('set-tray-on-close', Boolean(enabled)),
 })
 
+contextBridge.exposeInMainWorld('clipboard', {
+  writeText: (value) => ipcRenderer.invoke('clipboard-write-text', String(value ?? '')),
+})
+
 contextBridge.exposeInMainWorld('externalLinks', {
   open: (url) => ipcRenderer.invoke('open-external', url),
 })

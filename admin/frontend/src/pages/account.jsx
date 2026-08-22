@@ -1,6 +1,6 @@
 import {  useEffect, useMemo, useRef, useState  } from 'react'
 import { Copy, ExternalLink, MoreHorizontal, Pause, Play, Plus, RefreshCw, Search, Square, Trash2, UserRound } from 'lucide-react'
-import { api } from '../lib/api.js'
+import { api, copyText } from '../lib/api.js'
 import { botStatusLabel, botStatusState, isBotRunning, isBotTransitioning, openExternal } from '../lib/bot.js'
 import { findLoginVerification, prepareLogItems } from '../lib/logs.js'
 import { BotAvatar, BotUptime, EmptyDetail, FrameworkSelect, LogItem, RestartableStatus, StatusPill } from '../components.jsx'
@@ -96,7 +96,8 @@ export function WebUiCredentials({ bot, onOpenWebUi, onNotice }) {
   const copy = async (value, label) => {
     if (!value) return
     try {
-      await navigator.clipboard.writeText(value)
+      const copied = await copyText(value)
+      if (!copied) throw new Error('clipboard unavailable')
       onNotice(`${label}已复制`)
     } catch {
       onNotice(`无法复制${label}，请手动选择`)

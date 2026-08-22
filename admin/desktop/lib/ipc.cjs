@@ -1,5 +1,5 @@
 // IPC 注册：渲染进程的窗口控制、桌面配置、外部链接、WebUI 子窗口与目录选择。
-const { BrowserWindow, dialog, ipcMain, shell } = require('electron')
+const { BrowserWindow, clipboard, dialog, ipcMain, shell } = require('electron')
 const state = require('./state.cjs')
 const { getTrayOnClose, setTrayOnClose } = require('./config.cjs')
 const { hideToTray } = require('./tray.cjs')
@@ -20,6 +20,13 @@ function registerIpc(options) {
     if (getTrayOnClose()) hideToTray()
     else void closeApplication()
   })
+  ipcMain.handle('clipboard-write-text', (_event, value) => {
+    const text = String(value ?? '')
+    if (!text) return false
+    clipboard.writeText(text)
+    return true
+  })
+
   ipcMain.handle('get-desktop-config', () => ({ trayOnClose: getTrayOnClose() }))
   ipcMain.on('set-tray-on-close', (_event, enabled) => setTrayOnClose(enabled))
 

@@ -6,7 +6,7 @@ import {
 import './styles.css'
 import './layout.css'
 import './theme-packages/blue.css'
-import { api, dashboardApi, DASHBOARD_POLL_INTERVAL_MS } from './lib/api.js'
+import { api, copyText, dashboardApi, DASHBOARD_POLL_INTERVAL_MS } from './lib/api.js'
 import { EMPTY_PLUGIN_FRAMEWORKS, astrbotDashboardPort, normalizePluginFrameworks, openExternal, webUiTarget } from './lib/bot.js'
 import { isCurrentSessionLog, mergeCurrentSessionLogs, orderCurrentSessionLogs, resolveQuickLoginCommand } from './lib/logs.js'
 import { deriveStatsFromLogs } from './lib/stats.js'
@@ -865,7 +865,7 @@ class AppErrorBoundary extends React.Component {
         {this.state.stack && <details className="app-runtime-error-stack"><summary>组件调用栈（排查用）</summary><pre>{this.state.stack}</pre></details>}
         <p className="app-runtime-error-hint">错误已保存在本机（qq-console-last-errors），下次出现时点「复制错误信息」发给开发者即可定位。</p>
         <div className="app-runtime-error-actions">
-          <button type="button" onClick={() => navigator.clipboard?.writeText(`${message}\n\n${this.state.stack || ''}`).catch(() => {})}>复制错误信息</button>
+          <button type="button" onClick={() => copyText(`${message}\n\n${this.state.stack || ''}`).catch(() => {})}>复制错误信息</button>
           <button type="button" onClick={() => this.setState({ error: null, stack: '' })}>重试</button>
           <button type="button" onClick={() => window.location.reload()}>重新加载控制台</button>
         </div>
