@@ -40,6 +40,10 @@ class BotPasswordPayload(BaseModel):
     password: str | None = Field(default=None, max_length=256)
 
 
+class AstrbotPasswordPayload(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
 class BotPortPayload(BaseModel):
     port: int = Field(ge=1024, le=65535)
 
@@ -509,6 +513,36 @@ async def napcat_webui_credentials(bot_id: str, request: Request) -> dict[str, A
 async def astrbot_webui_credentials(bot_id: str, request: Request) -> dict[str, Any]:
     try:
         return await asyncio.to_thread(service(request).astrbot_webui_credentials, bot_id)
+    except DomainError as error:
+        raise HTTPException(error.status_code, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@router.get("/bots/{bot_id}/astrbot/password")
+async def astrbot_password(bot_id: str, request: Request) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(service(request).astrbot_password, bot_id)
+    except DomainError as error:
+        raise HTTPException(error.status_code, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@router.put("/bots/{bot_id}/astrbot/password")
+async def save_astrbot_password(bot_id: str, payload: AstrbotPasswordPayload, request: Request) -> dict[str, Any]:
+    try:
+        return await asyncio.to_thread(service(request).save_astrbot_password, bot_id, payload.password)
+    except DomainError as error:
+        raise HTTPException(error.status_code, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@router.delete("/bots/{bot_id}/astrbot/password")
+async def clear_astrbot_password(bot_id: str, request: Request) -> dict[str, bool]:
+    try:
+        return await asyncio.to_thread(service(request).clear_astrbot_password, bot_id)
     except DomainError as error:
         raise HTTPException(error.status_code, str(error)) from error
     except ValueError as error:

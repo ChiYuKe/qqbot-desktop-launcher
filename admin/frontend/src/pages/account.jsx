@@ -124,9 +124,39 @@ export function WebUiCredentials({ bot, onOpenWebUi, onNotice }) {
     try {
       const result = await api(`/api/bots/${bot.id}/astrbot/password/reset`, { method: 'POST' })
       setResetCredentials(result)
-      onNotice('AstrBot WebUI 密码已重置，重启 Bot 后生效')
+      setStatus((current) => current?.astrbot ? { ...current, astrbot: { ...current.astrbot, password_saved: true } } : current)
+      onNotice('AstrBot WebUI 密码已重置并加密保存，重启 Bot 后生效')
     } catch (error) {
       onNotice(`密码重置失败：${error.message}`)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const revealAstrbotPassword = async () => {
+    if (busy) return
+    setBusy('astrbot-password')
+    try {
+      const result = await api(`/api/bots/${bot.id}/astrbot/password`)
+      setResetCredentials({ ...result, password_saved: true, restart_required: false })
+      onNotice('已读取本机保存的 AstrBot WebUI 密码')
+    } catch (error) {
+      onNotice(`密码读取失败：${error.message}`)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const clearAstrbotPassword = async () => {
+    if (busy || !window.confirm('确定清除本机保存的 AstrBot WebUI 密码吗？不会修改 AstrBot 当前密码。')) return
+    setBusy('astrbot-clear-password')
+    try {
+      await api(`/api/bots/${bot.id}/astrbot/password`, { method: 'DELETE' })
+      setResetCredentials(null)
+      setStatus((current) => current?.astrbot ? { ...current, astrbot: { ...current.astrbot, password_saved: false } } : current)
+      onNotice('本机保存的 AstrBot WebUI 密码已清除')
+    } catch (error) {
+      onNotice(`密码清除失败：${error.message}`)
     } finally {
       setBusy('')
     }
@@ -139,9 +169,9 @@ export function WebUiCredentials({ bot, onOpenWebUi, onNotice }) {
       <div className="config-card-title"><div><strong>WebUI 登录信息</strong><span>本机恢复</span></div><StatusPill label={status ? '可检查' : '读取中'} state={status ? 'green' : 'muted'} /></div>
       <div className="credential-row"><div><strong>NapCat Token</strong><small>{napcat?.available ? '已从本机进程日志找到最新 Token' : '暂未找到 Token，请先启动 NapCat'}</small></div><div className="credential-actions"><button type="button" className="secondary" onClick={() => onOpenWebUi('napcat', bot)}>打开 WebUI</button><button type="button" className="secondary" disabled={busy === 'napcat' || !napcat?.available} onClick={revealNapcatToken}>{busy === 'napcat' ? '读取中…' : '显示 Token'}</button></div></div>
       {napcatToken && <div className="credential-secret"><input readOnly value={napcatToken} aria-label="NapCat Token" /><button type="button" className="plain-icon" onClick={() => copy(napcatToken, 'NapCat Token')} aria-label="复制 NapCat Token" data-tooltip="复制 NapCat Token"><Copy size={15} /></button></div>}
-      {astrbot && <div className="credential-row"><div><strong>AstrBot WebUI</strong><small>用户名：<span className="mono">{astrbot.username}</span>{astrbot.password_change_required ? ' · 当前密码需要修改' : ''}</small></div><div className="credential-actions"><button type="button" className="secondary" onClick={() => onOpenWebUi('astrbot', bot)}>打开 WebUI</button><button type="button" className="secondary" disabled={busy === 'astrbot'} onClick={resetAstrbotPassword}>{busy === 'astrbot' ? '重置中…' : '重置密码'}</button></div></div>}
-      {resetCredentials && <div className="credential-secret generated-credential"><div><span>新用户名</span><b className="mono">{resetCredentials.username}</b></div><div className="generated-password"><span>新密码</span><input readOnly value={resetCredentials.password} aria-label="AstrBot 新密码" /><button type="button" className="plain-icon" onClick={() => copy(resetCredentials.password, 'AstrBot 新密码')} aria-label="复制 AstrBot 新密码" data-tooltip="复制 AstrBot 新密码"><Copy size={15} /></button></div><small>密码只在本次页面中显示，不会写入日志；请立即保存。重启 Bot 后登录。</small></div>}
-      <small className="credential-note">管理控制台不会读取或恢复旧密码；找不到 NapCat Token 时，启动一次 NapCat 后再重试。</small>
+      {astrbot && <div className="credential-row"><div><strong>AstrBot WebUI</strong><small>用户名：<span className="mono">{astrbot.username}</span>{astrbot.password_saved ? ' · 密码已加密保存' : ' · 尚未保存密码'}</small></div><div className="credential-actions"><button type="button" className="secondary" onClick={() => onOpenWebUi('astrbot', bot)}>打开 WebUI</button>{astrbot.password_saved ? <button type="button" className="secondary" disabled={Boolean(busy)} onClick={revealAstrbotPassword}>{busy === 'astrbot-password' ? '读取中…' : '显示密码'}</button> : null}<button type="button" className="secondary" disabled={Boolean(busy)} onClick={resetAstrbotPassword}>{busy === 'astrbot' ? '重置中…' : '重置密码'}</button>{astrbot.password_saved ? <button type="button" className="secondary" disabled={Boolean(busy)} onClick={clearAstrbotPassword}>{busy === 'astrbot-clear-password' ? '清除中…' : '清除保存'}</button> : null}</div></div>}
+      {resetCredentials && <div className="credential-secret generated-credential"><div><span>{resetCredentials.password_saved ? 'WebUI 密码' : '新密码'}</span><input readOnly type="text" value={resetCredentials.password} aria-label="AstrBot WebUI 密码" /><button type="button" className="plain-icon" onClick={() => copy(resetCredentials.password, 'AstrBot WebUI 密码')} aria-label="复制 AstrBot WebUI 密码" data-tooltip="复制 AstrBot WebUI 密码"><Copy size={15} /></button></div><small>{resetCredentials.restart_required ? '密码已加密保存到本机；重启 Bot 后登录。' : '密码已从本机加密存储中读取。若在 AstrBot 内修改，请重新重置并保存。'}</small></div>}
+      <small className="credential-note">AstrBot WebUI 密码只在你点击“显示密码”时读取；保存内容受当前 Windows 用户保护，换用户后无法恢复。</small>
     </section>
   </>
 }

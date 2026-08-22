@@ -122,6 +122,7 @@ class BotService:
         bot = self.manager.get(bot_id)
         await self.manager.stop_now(bot_id, "删除")
         self.repository.delete(bot_id)
+        runtime_config.forget_astrbot_dashboard_password(bot_id)
         self.manager.refresh_bot_index()
         self.stats.remove_bot(bot_id)
         script = Path(bot.script)
@@ -196,6 +197,26 @@ class BotService:
         if bot.framework != "astrbot":
             raise ValueError("只有 AstrBot 账号可以打开 AstrBot WebUI")
         return runtime_config.astrbot_webui_credentials(bot.id, bot.napcat_port)
+
+    def save_astrbot_password(self, bot_id: str, password: str) -> dict[str, object]:
+        bot = self.manager.get(bot_id)
+        if bot.framework != "astrbot":
+            raise ValueError("只有 AstrBot 账号可以保存 WebUI 密码")
+        status = runtime_config.astrbot_dashboard_status(bot.id, bot.napcat_port)
+        return runtime_config.save_astrbot_dashboard_password(bot.id, str(status["username"]), password)
+
+    def astrbot_password(self, bot_id: str) -> dict[str, str]:
+        bot = self.manager.get(bot_id)
+        if bot.framework != "astrbot":
+            raise ValueError("只有 AstrBot 账号可以读取 WebUI 密码")
+        return runtime_config.astrbot_dashboard_password(bot.id)
+
+    def clear_astrbot_password(self, bot_id: str) -> dict[str, bool]:
+        bot = self.manager.get(bot_id)
+        if bot.framework != "astrbot":
+            raise ValueError("只有 AstrBot 账号可以清除 WebUI 密码")
+        runtime_config.forget_astrbot_dashboard_password(bot.id)
+        return {"ok": True, "password_saved": False}
 
     def reset_astrbot_password(self, bot_id: str) -> dict[str, object]:
         bot = self.manager.get(bot_id)

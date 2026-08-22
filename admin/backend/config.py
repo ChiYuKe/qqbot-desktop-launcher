@@ -15,6 +15,8 @@ import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
+from backend.security.secrets import protect_secret, reveal_secret
+
 
 ROOT = Path(
     os.getenv("QQ_BOT_ROOT", str(Path(__file__).resolve().parents[2]))
@@ -39,6 +41,7 @@ CONSOLE_PLUGIN_STATE_FILE = DATA_DIR / "console-plugins.json"
 CONSOLE_PLUGIN_SETTINGS_FILE = DATA_DIR / "console-plugin-settings.json"
 # 管理服务行为设置，当前只有“退出时是否保留 Bot 进程”。
 BEHAVIOR_SETTINGS_FILE = DATA_DIR / "behavior-settings.json"
+ASTRBOT_PASSWORD_STORE_FILE = DATA_DIR / "astrbot-dashboard-passwords.json"
 
 DEFAULT_NONEBOT_DIR = PROGRAM_DIR / "NoneBot"
 DEFAULT_ASTRBOT_DIR = PROGRAM_DIR / "AstrBot"
@@ -332,6 +335,65 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
                 pass
 
 
+def _load_astrbot_password_store() -> dict[str, dict[str, str]]:
+    try:
+        raw = json.loads(ASTRBOT_PASSWORD_STORE_FILE.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    records = raw.get("credentials") if isinstance(raw, dict) else None
+    if not isinstance(records, dict):
+        return {}
+    result: dict[str, dict[str, str]] = {}
+    for bot_id, record in records.items():
+        if not isinstance(bot_id, str) or not isinstance(record, dict):
+            continue
+        password_secret = record.get("password_secret")
+        if not isinstance(password_secret, str) or not password_secret:
+            continue
+        result[bot_id] = {
+            "username": str(record.get("username") or "astrbot"),
+            "password_secret": password_secret,
+        }
+    return result
+
+
+def _save_astrbot_password_store(records: dict[str, dict[str, str]]) -> None:
+    _write_json_atomic(ASTRBOT_PASSWORD_STORE_FILE, {"version": 1, "credentials": records})
+
+
+def save_astrbot_dashboard_password(bot_id: str, username: str, password: str) -> dict[str, object]:
+    if not password:
+        raise ValueError("AstrBot WebUI 密码不能为空")
+    records = _load_astrbot_password_store()
+    records[bot_id] = {
+        "username": username or "astrbot",
+        "password_secret": protect_secret(password),
+    }
+    _save_astrbot_password_store(records)
+    return {"username": records[bot_id]["username"], "saved": True}
+
+
+def astrbot_dashboard_password(bot_id: str) -> dict[str, str]:
+    record = _load_astrbot_password_store().get(bot_id)
+    if not record:
+        raise ValueError("当前没有保存的 AstrBot WebUI 密码")
+    try:
+        password = reveal_secret(record["password_secret"])
+    except RuntimeError as error:
+        raise ValueError(str(error)) from error
+    if not password:
+        raise ValueError("保存的 AstrBot WebUI 密码无效")
+    return {"username": record["username"], "password": password}
+
+
+def forget_astrbot_dashboard_password(bot_id: str) -> None:
+    records = _load_astrbot_password_store()
+    if bot_id not in records:
+        return
+    records.pop(bot_id, None)
+    _save_astrbot_password_store(records)
+
+
 def _generate_astrbot_dashboard_password() -> str:
     """Generate a password compatible with AstrBot's dashboard policy."""
     alphabet = string.ascii_letters + string.digits
@@ -427,6 +489,7 @@ def astrbot_dashboard_status(bot_id: str, napcat_port: int) -> dict[str, object]
         "username": username,
         "password_configured": bool(dashboard.get("pbkdf2_password") or dashboard.get("password")),
         "password_change_required": bool(dashboard.get("password_change_required", False)),
+        "password_saved": bool(_load_astrbot_password_store().get(bot_id)),
     }
 
 
@@ -473,9 +536,11 @@ def reset_astrbot_dashboard_password(bot_id: str) -> dict[str, object]:
     )
     config.setdefault("config_version", 2)
     _write_json_atomic(path, config)
+    save_astrbot_dashboard_password(bot_id, str(dashboard["username"]), password)
     return {
         "username": dashboard["username"],
         "password": password,
+        "password_saved": True,
         "restart_required": True,
     }
 
