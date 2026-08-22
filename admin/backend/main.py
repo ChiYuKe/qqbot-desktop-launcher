@@ -84,8 +84,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
-        await app.state.bot_service.shutdown()
+        # Terminate or detach the tracked processes first: the desktop waits
+        # for this process to exit before its cleanup fallback, so starting
+        # the process work early keeps the shutdown window short.
         await manager.shutdown()
+        await app.state.bot_service.shutdown()
         app.state.console_plugin_registry.shutdown_all()
         await event_bus.stop()
 

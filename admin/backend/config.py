@@ -37,6 +37,8 @@ PROCESS_LOG_DIR = DATA_DIR / "process-logs"
 CONSOLE_PLUGIN_STATE_FILE = DATA_DIR / "console-plugins.json"
 # 控制台插件配置（plugin_id -> JSON 对象），与启停状态分开保存。
 CONSOLE_PLUGIN_SETTINGS_FILE = DATA_DIR / "console-plugin-settings.json"
+# 管理服务行为设置，当前只有“退出时是否保留 Bot 进程”。
+BEHAVIOR_SETTINGS_FILE = DATA_DIR / "behavior-settings.json"
 
 DEFAULT_NONEBOT_DIR = PROGRAM_DIR / "NoneBot"
 DEFAULT_ASTRBOT_DIR = PROGRAM_DIR / "AstrBot"
@@ -56,6 +58,34 @@ def _load_resource_paths() -> dict[str, str]:
 
 
 _resource_paths = _load_resource_paths()
+
+
+def _load_behavior_settings() -> dict[str, bool]:
+    try:
+        raw = json.loads(BEHAVIOR_SETTINGS_FILE.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(key): bool(value) for key, value in raw.items() if isinstance(value, bool)}
+
+
+def behavior_settings() -> dict[str, bool]:
+    # 默认保留：管理服务退出时 AstrBot/NapCat 继续运行，下次启动通过外部进程发现自动接管。
+    settings = _load_behavior_settings()
+    return {"keep_bot_processes_on_exit": settings.get("keep_bot_processes_on_exit", True)}
+
+
+def keep_bot_processes_on_exit() -> bool:
+    return behavior_settings()["keep_bot_processes_on_exit"]
+
+
+def set_keep_bot_processes_on_exit(enabled: bool) -> dict[str, bool]:
+    settings = _load_behavior_settings()
+    settings["keep_bot_processes_on_exit"] = bool(enabled)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    BEHAVIOR_SETTINGS_FILE.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return behavior_settings()
 
 
 def _relocate_project_path(raw_path: object) -> Path:

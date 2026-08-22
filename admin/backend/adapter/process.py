@@ -378,18 +378,36 @@ class OutputProcessAdapter:
             await terminate_processes({process.pid})
         self.forget(bot_id)
 
-    async def shutdown(self) -> None:
-        pids = [process.pid for process in self._processes.values() if process.poll() is None]
-        await terminate_processes(pids)
+    async def shutdown(self, keep_processes: bool = False) -> None:
+        """Release all tracking state and stop drain tasks.
+
+        With ``keep_processes`` the tracked processes are detached instead of
+        terminated: their stdout already points at the per-bot log file, so
+        they keep running and the next session re-attaches through external
+        process discovery.
+
+        Without it, adopted external processes are terminated as well.
+        Processes retained by a previous session are no longer children of
+        this backend, so neither this terminator nor the desktop's tree kill
+        would reach them otherwise.
+        """
+        if not keep_processes:
+            pids = [process.pid for process in self._processes.values() if process.poll() is None]
+            for bot_id in tuple(self._external):
+                external = self.tracked_process(bot_id)
+                if external is not None:
+                    pids.append(external.pid)
+            await terminate_processes(pids)
         tasks = tuple(self._drain_tasks.values())
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        for process in self._processes.values():
-            close = getattr(process, "close", None)
-            if close is not None:
-                close()
+        if not keep_processes:
+            for process in self._processes.values():
+                close = getattr(process, "close", None)
+                if close is not None:
+                    close()
         self._processes.clear()
         self._external.clear()
         self._started_at.clear()

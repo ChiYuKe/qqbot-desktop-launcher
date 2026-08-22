@@ -17,6 +17,7 @@ from backend.database.stats_repository import MessageStatsRepository, parse_proc
 from backend.domain.errors import BotNotFoundError, ConflictError, OperationError
 from backend.domain.models import BotConfig
 from backend.event.bus import EventBus
+import backend.config as runtime_config
 
 
 ACTIVE_OPERATION_STATES = {"queued", "running"}
@@ -796,10 +797,15 @@ class BotManager:
                 await asyncio.wait_for(stats_task, timeout=2.0)
         self._stats_task = None
         self._stats_queue = None
-        # Only processes started by this backend belong to its shutdown scope.
-        # Discovered external processes must remain available for the next session.
-        await self.onebot.shutdown()
-        await self.napcat.shutdown()
+        # The shutdown scope covers everything this backend tracks: locally
+        # started processes plus external ones adopted through discovery —
+        # retained processes from a previous session are external and would
+        # otherwise survive every later exit. With the retain-on-exit behavior
+        # setting enabled both kinds are detached instead, and the next
+        # session re-attaches them through external discovery.
+        keep_processes = runtime_config.keep_bot_processes_on_exit()
+        await self.onebot.shutdown(keep_processes=keep_processes)
+        await self.napcat.shutdown(keep_processes=keep_processes)
 
 
 def _action_label(action: str) -> str:

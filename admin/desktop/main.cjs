@@ -77,9 +77,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('before-quit', event => {
-  if (state.apiPid && !state.closingApplication) {
+  // 关闭流程未完成前阻止退出：主窗口先销毁会触发 window-all-closed，
+  // 必须等管理 API 的优雅停机（终止或保留 Bot 进程）结束后才真正退出。
+  if (!state.shutdownFinished) {
     event.preventDefault()
-    void closeApplication()
+    if (!state.closingApplication) void closeApplication()
   }
 })
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })

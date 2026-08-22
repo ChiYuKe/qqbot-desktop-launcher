@@ -229,11 +229,19 @@ function requestBackendShutdown() {
       method: 'POST',
       headers: { Authorization: `Bearer ${sessionToken}` },
     }, response => {
-      response.resume()
-      response.on('end', () => resolve(response.statusCode === 200))
+      let body = ''
+      response.on('data', chunk => { body += chunk })
+      response.on('end', () => {
+        if (response.statusCode !== 200) return resolve(null)
+        try {
+          resolve(JSON.parse(body))
+        } catch {
+          resolve(null)
+        }
+      })
     })
-    request.on('error', () => resolve(false))
-    request.setTimeout(1500, () => { request.destroy(); resolve(false) })
+    request.on('error', () => resolve(null))
+    request.setTimeout(1500, () => { request.destroy(); resolve(null) })
     request.end()
   })
 }
@@ -250,19 +258,49 @@ function waitForApiExit(timeoutMs = 8000) {
   })
 }
 
+function waitForProcessExit(processHandle, timeoutMs = 20000) {
+  return new Promise(resolve => {
+    if (!processHandle || processHandle.exitCode !== null || processHandle.killed) return resolve(true)
+    let settled = false
+    const finish = value => {
+      if (settled) return
+      settled = true
+      processHandle.removeListener('exit', onExit)
+      clearTimeout(timer)
+      resolve(value)
+    }
+    const onExit = () => finish(true)
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    processHandle.once('exit', onExit)
+  })
+}
+
 async function stopApiProcess() {
   if (state.apiStopping) return
-  const pid = state.apiPid || state.apiProcess?.pid
+  const processHandle = state.apiProcess
+  const pid = state.apiPid || processHandle?.pid
   if (!pid) return
   state.apiStopping = true
-  await requestBackendShutdown()
-  const exited = await waitForApiExit()
+  const shutdownInfo = await requestBackendShutdown()
+  // Uvicorn closes its listening socket before running the lifespan shutdown
+  // that terminates or detaches the tracked processes, so the health probe
+  // going offline does not mean the cleanup finished.  Wait for the real
+  // process exit; fall back to the probe only when we hold no process handle
+  // (e.g. the backend was adopted from an external session).
+  const exited = processHandle
+    ? await waitForProcessExit(processHandle, 20000)
+    : await waitForApiExit(15000)
+  // The shutdown response reports whether the "retain Bot processes on exit"
+  // behavior is enabled. Bot children live inside this process tree, so the
+  // tree kill below would take AstrBot/NapCat down together with the backend.
+  // It stays as the fallback for when the retain setting is off or the backend
+  // failed to exit gracefully (then plugin processes like DSH also need the
+  // forced cleanup).  taskkill is a no-op when the process has already exited.
+  const keepBotProcesses = Boolean(shutdownInfo?.keep_bot_processes)
   if (process.platform === 'win32') {
-    // Always clean up the process tree on Windows to ensure child processes
-    // (e.g. DSH started by console plugins) are terminated even when the
-    // backend exits gracefully.  taskkill is a no-op when the process has
-    // already exited.
-    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    if (!keepBotProcesses || !exited) {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    }
   } else if (!exited) {
     try { process.kill(pid, 'SIGTERM') } catch {}
   }

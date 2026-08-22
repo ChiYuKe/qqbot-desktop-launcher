@@ -51,3 +51,5 @@ cd ..
 当前 UI 不预置任何假账号。点击“新建账号”填写真实名称、QQ 号和端口后，配置会保存到 `data/admin/bots.db`，并自动生成该实例的独立启动脚本；之后即可在面板中启动、停止和重启。已有 `data/admin/bots.json` 会在首次启动时自动迁移。
 
 点击 Bot 的“启动”时，管理器会先启动本机 NapCat，再启动 NoneBot。默认 NapCat 路径为 `program\NapCat\app\NapCat.44498.Shell\NapCatWinBootMain.exe`；如果安装位置不同，可设置环境变量 `NAPCAT_DIR` 指向包含 `NapCatWinBootMain.exe` 的目录。
+
+设置 → 常规中的“退出时保留 Bot 进程”（默认开启）控制控制台退出时的行为：开启时 AstrBot 与 NapCat 继续在后台运行，下次启动控制台会通过端口探测自动接管；关闭时退出会一并停止这些进程。插件启动的子进程（如 DSH WebUI）始终会在退出时清理。

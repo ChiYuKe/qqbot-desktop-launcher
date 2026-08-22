@@ -233,6 +233,12 @@ class BotService:
     def resources(self) -> dict:
         return runtime_config.resource_status()
 
+    def behavior(self) -> dict[str, bool]:
+        return runtime_config.behavior_settings()
+
+    def update_behavior(self, keep_bot_processes_on_exit: bool) -> dict[str, bool]:
+        return runtime_config.set_keep_bot_processes_on_exit(keep_bot_processes_on_exit)
+
     def update_resource(self, kind: str, path: str) -> dict:
         return runtime_config.set_resource_path(kind, path)
 

@@ -18,4 +18,5 @@ module.exports = {
   trayMenu: null,
   trayBalloonShown: false,
   closingApplication: false,
+  shutdownFinished: false,
 }

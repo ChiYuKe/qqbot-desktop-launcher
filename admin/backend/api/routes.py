@@ -64,6 +64,10 @@ class PluginSettingsPayload(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
 
 
+class BehaviorPayload(BaseModel):
+    keep_bot_processes_on_exit: bool
+
+
 class GitPluginInstallPayload(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     ref: str | None = Field(default=None, max_length=128)
@@ -125,6 +129,16 @@ async def napcat_status(request: Request) -> dict[str, Any]:
 @router.get("/runtime/resources")
 async def runtime_resources(request: Request) -> dict[str, Any]:
     return await asyncio.to_thread(service(request).resources)
+
+
+@router.get("/runtime/behavior")
+async def runtime_behavior(request: Request) -> dict[str, Any]:
+    return await asyncio.to_thread(service(request).behavior)
+
+
+@router.put("/runtime/behavior")
+async def update_runtime_behavior(payload: BehaviorPayload, request: Request) -> dict[str, Any]:
+    return await asyncio.to_thread(service(request).update_behavior, payload.keep_bot_processes_on_exit)
 
 
 @router.get("/cache")
@@ -202,7 +216,8 @@ async def request_shutdown(request: Request) -> dict[str, bool]:
     if server is None:
         raise HTTPException(503, "当前管理服务不支持优雅关闭")
     server.should_exit = True
-    return {"ok": True}
+    # 桌面端根据该标记决定是否跳过整树 taskkill，避免误杀需保留的 Bot 进程。
+    return {"ok": True, "keep_bot_processes": runtime_config.keep_bot_processes_on_exit()}
 
 
 @router.get("/plugins")
