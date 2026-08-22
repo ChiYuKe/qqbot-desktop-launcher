@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
-  Bell, Bot, Check, ChevronDown, Download, ExternalLink, Eye, EyeOff, Image as ImageIcon,
-  Minimize2, Maximize2, Plus, SquareTerminal, Star, X,
+  Bell, Bot, Check, ChevronDown, CircleHelp, Download, ExternalLink, Eye, EyeOff, FolderGit2, Image as ImageIcon,
+  LayoutDashboard, ListChecks, Minimize2, Maximize2, Plus, SquareTerminal, Star, X,
 } from 'lucide-react'
 import { fetchAuthenticatedBlob } from './lib/api.js'
 import { isBotRunning, isBotTransitioning, openExternal } from './lib/bot.js'
@@ -200,4 +200,17 @@ export function CreateAccountModal({ account, creating, onChange, onClose, onSub
 
 export function DeleteAccountModal({ bot, deleting, onClose, onConfirm }) {
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="delete-modal" role="alertdialog" aria-labelledby="delete-account-title"><div className="modal-header"><div><div className="eyebrow">QQ 控制台</div><h2 id="delete-account-title">删除账号</h2><p>确认删除「{bot.name}」？</p></div><button type="button" className="modal-close" onClick={onClose} aria-label="关闭" disabled={deleting}><X size={18} /></button></div><div className="delete-warning">删除后会移除账号记录和专属启动脚本；不会删除 NapCat 安装文件。</div><div className="modal-actions"><button type="button" className="secondary" onClick={onClose} disabled={deleting}>取消</button><button type="button" className="action-button danger" onClick={onConfirm} disabled={deleting}>{deleting ? '删除中…' : '确认删除'}</button></div></div></div>
+}
+
+const HELP_TOPICS = [
+  { icon: CircleHelp, title: '快速开始', text: '在「QQ 账号」页新建账号并设置 OneBot 端口，启动后按提示扫码或使用密码登录。' },
+  { icon: SquareTerminal, title: '服务配置', text: '左侧「服务」区域进入 NapCat / NoneBot / AstrBot 页面，可完成下载、安装与环境配置。' },
+  { icon: ListChecks, title: '日志与命令', text: '账号详情底部查看实时日志，也可直接输入命令发送到运行中的进程。' },
+  { icon: LayoutDashboard, title: '个性化设置', text: '通过左下角「更多 → 设置」调整主题、字体与运行偏好。' },
+]
+
+const HELP_REPO_URL = 'https://github.com/ChiYuKe/qqbot-desktop-launcher'
+
+export function HelpModal({ onClose }) {
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="create-modal help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title"><div className="modal-header"><div><div className="eyebrow">桌面控制台</div><h2 id="help-title">帮助</h2><p>使用提示与常用操作说明</p></div><button type="button" className="modal-close" onClick={onClose} aria-label="关闭帮助"><X size={18} /></button></div><div className="help-topics">{HELP_TOPICS.map(({ icon: Icon, title, text }) => <div className="help-topic" key={title}><span className="help-topic-icon"><Icon size={16} /></span><div><strong>{title}</strong><p>{text}</p></div></div>)}<button type="button" className="help-repo" onClick={() => openExternal(HELP_REPO_URL)}><FolderGit2 size={16} /><span>项目地址</span><code>{HELP_REPO_URL}</code><ExternalLink size={13} /></button></div><div className="modal-actions"><button type="button" className="action-button" onClick={onClose}>知道了</button></div></div></div>
 }

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  Activity, Bell, Bot, ChevronDown, ChevronLeft, CircleHelp, LayoutDashboard, Loader2, Puzzle, Server, Settings, SquareTerminal, UserRound,
+  Activity, Bell, Bot, ChevronDown, ChevronLeft, CircleHelp, Ellipsis, LayoutDashboard, Loader2, Puzzle, Server, Settings, SquareTerminal, UserRound,
 } from 'lucide-react'
 import './styles.css'
 import './layout.css'
@@ -19,7 +19,7 @@ import {
   favoritePageDefinitions, isNotificationActive, normalizeNotification,
   readNotificationState, readPreferences,
 } from './constants.js'
-import { CreateAccountModal, DeleteAccountModal, NavItem, NotificationCenterModal, WebUiMenuItem, WindowControls } from './components.jsx'
+import { CreateAccountModal, DeleteAccountModal, HelpModal, NavItem, NotificationCenterModal, WebUiMenuItem, WindowControls } from './components.jsx'
 import { AccountWorkspace } from './pages/account.jsx'
 import { EmbeddedWebUiBubble, EmbeddedWebUiPage } from './pages/embedded.jsx'
 import { OverviewPage } from './pages/overview.jsx'
@@ -54,6 +54,17 @@ function App() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [deleting, setDeleting] = useState(false)
   const [logsPaused, setLogsPaused] = useState(false)
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const moreMenuRef = useRef(null)
+  useEffect(() => {
+    if (!moreMenuOpen) return
+    const onDocClick = (event) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(event.target)) setMoreMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [moreMenuOpen])
   const [newAccount, setNewAccount] = useState({ name: '', qq: '', port: '', framework: 'nonebot', napcatPort: '', password: '' })
   const [online, setOnline] = useState(false)
   const [webUiMenuOpen, setWebUiMenuOpen] = useState(false)
@@ -781,9 +792,16 @@ function App() {
           <NavItem icon={SquareTerminal} label="NoneBot" active={active} onClick={navigate} favoriteKey="page:NoneBot" favorite={isFavorite('page:NoneBot')} onToggleFavorite={toggleFavorite} />
           <NavItem icon={Bot} label="AstrBot" active={active} onClick={navigate} favoriteKey="page:AstrBot" favorite={isFavorite('page:AstrBot')} onToggleFavorite={toggleFavorite} />
         </nav>
-        <div className="sidebar-bottom">
-          <button className="bottom-item" onClick={() => navigate('系统设置')}><Settings size={16} />设置</button>
-          <button className="bottom-item" onClick={() => notify('桌面控制台正在运行')}><CircleHelp size={16} />帮助</button>
+        <div className="sidebar-bottom" ref={moreMenuRef}>
+          <div className="sidebar-bottom-actions">
+            {moreMenuOpen && (
+              <div className="more-menu">
+                <button className="more-menu-item" onClick={() => { setMoreMenuOpen(false); navigate('系统设置') }}><Settings size={16} />设置</button>
+                <button className="more-menu-item" onClick={() => { setMoreMenuOpen(false); setHelpOpen(true) }}><CircleHelp size={16} />帮助</button>
+              </div>
+            )}
+            <button className="bottom-item" onClick={() => setMoreMenuOpen(value => !value)}><Ellipsis size={16} />更多</button>
+          </div>
         </div>
       </aside>
 
@@ -797,6 +815,7 @@ function App() {
      {notificationOpen && <NotificationCenterModal items={notificationState.items.filter(isNotificationActive)} onClose={() => setNotificationOpen(false)} />}
     {createOpen && <CreateAccountModal account={newAccount} creating={creating} onChange={setNewAccount} onClose={closeCreateModal} onSubmit={createAccount} />}
     {deleteTarget && <DeleteAccountModal bot={deleteTarget} deleting={deleting} onClose={() => !deleting && setDeleteTarget(null)} onConfirm={deleteAccount} />}
+    {helpOpen && <HelpModal onClose={() => setHelpOpen(false)} />}
     {resources && resourceSetupOpen && <ResourceSetupModal key={resourceSetup?.id || 'new'} resources={resources} setup={resourceSetup} onSetup={startResourceSetup} onSelect={selectResource} onRefresh={() => loadDashboard(true)} onClose={() => setResourceSetupOpen(false)} />}
     {toast && <div className="toast"><span className="live-dot" />{toast}</div>}
   </div>
